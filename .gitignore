@@ -1,0 +1,8 @@
+*.pro.user*
+build/*
+build?*/
+!build*/Makefile
+!build*/CMakeLists.txt
+!build_test/*.sh
+_*/
+doc/
