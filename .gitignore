@@ -4,5 +4,6 @@ build?*/
 !build*/Makefile
 !build*/CMakeLists.txt
 !build_test/*.sh
+example/*example
 _*/
 doc/
