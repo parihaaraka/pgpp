@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2018 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PG_CONNECTION_H
@@ -6,7 +6,7 @@
 
 /** @file */
 
-#include <libpq-fe.h>
+#include <postgresql/libpq-fe.h>
 #include <atomic>
 #include <string>
 #include <functional>
@@ -16,7 +16,7 @@
 #include <mutex>
 #include <chrono>
 #include "dbpool.h"
-#include "pg_result.h"
+#include "pgpp/result.h"
 
 #define CONNECT_TIMEOUT_SEC 40
 

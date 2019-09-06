@@ -1,7 +1,7 @@
-// Copyright (c) 2015-2018 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
-#include "pg_query.h"
+#include "pgpp/query.h"
 
 namespace pg
 {

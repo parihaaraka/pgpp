@@ -7,3 +7,5 @@ build?*/
 example/*example
 _*/
 doc/
+html/
+latex/

@@ -1,9 +1,9 @@
-// Copyright (c) 2015-2018 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
-#include "pg_connection.h"
-#include "pg_query.h"
-#include "pg_result.h"
+#include "pgpp/connection.h"
+#include "pgpp/query.h"
+#include "pgpp/result.h"
 #include <thread>
 #include <cstring>
 

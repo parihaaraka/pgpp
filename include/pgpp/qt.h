@@ -2,7 +2,7 @@
 #define PG_QT_H
 
 #include <QVariant>
-#include "pg_params.h"
+#include "pgpp/params.h"
 
 namespace pg
 {

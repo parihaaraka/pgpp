@@ -1,8 +1,8 @@
 #include <ev++.h>
-#include "../dbpool.h"
-#include "../pg_connection.h"
-#include "../pg_query.h"
-#include "../pg_result.h"
+#include "pgpp/dbpool.h"
+#include "pgpp/connection.h"
+#include "pgpp/query.h"
+#include "pgpp/result.h"
 #include <iostream>
 #include <string.h>
 #include <fstream>

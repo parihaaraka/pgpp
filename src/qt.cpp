@@ -1,6 +1,6 @@
-#include "pg_qt.h"
-#include "pg_connection.h"
-#include "pg_types.h"
+#include "pgpp/pg_qt.h"
+#include "pgpp/pg_connection.h"
+#include "pgpp/pg_types.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QSettings>

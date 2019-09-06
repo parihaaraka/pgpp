@@ -1,7 +1,7 @@
 all:
-	g++ -std=c++11 -I/usr/include/postgresql -fPIC \
+	g++ -std=c++11 -I/usr/include/postgresql -I../include -fPIC \
 	main.cpp \
-	../pg_params.cpp \
-	../pg_result.cpp \
-	../pg_connection.cpp \
-	../pg_query.cpp -o pgpp_example -L. -lpq -lev
+	../src/params.cpp \
+	../src/result.cpp \
+	../src/connection.cpp \
+	../src/query.cpp -o pgpp_example -L. -lpq -lev

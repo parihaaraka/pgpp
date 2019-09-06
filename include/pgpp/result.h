@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2018 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PG_RESULT_H
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <libpq-fe.h>
+#include <postgresql/libpq-fe.h>
 
 namespace pg
 {

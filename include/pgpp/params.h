@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2018 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PARAMS_H

@@ -1,13 +1,13 @@
-// Copyright (c) 2015-2018 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PG_QUERY_H
 #define PG_QUERY_H
 
 #include <functional>
-#include "pg_params.h"
-#include "pg_result.h"
-#include "pg_connection.h"
+#include "pgpp/params.h"
+#include "pgpp/result.h"
+#include "pgpp/connection.h"
 
 namespace pg
 {
