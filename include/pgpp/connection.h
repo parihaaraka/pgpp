@@ -17,6 +17,7 @@
 #include <chrono>
 #include "dbpool.h"
 #include "pgpp/result.h"
+#include "fu2/function2.hpp"
 
 #define CONNECT_TIMEOUT_SEC 40
 
@@ -30,7 +31,7 @@ class query;
 class query_error : public std::runtime_error
 {
 public:
-    explicit query_error(std::shared_ptr<pg::result> res): std::runtime_error(PQresultErrorMessage(res->result_ptr())), _res(res) {}
+    explicit query_error(std::shared_ptr<pg::result> res);
     virtual std::shared_ptr<pg::result> result() const;
 private:
     std::shared_ptr<pg::result> _res;
@@ -38,9 +39,10 @@ private:
 
 /** Socket state enum. */
 enum socket_watch_mode {
-    none = 0, /**< used to disable watching */
-    read,     /**< ready read state */
-    write     /**< ready write state */
+    none = 0,  /**< used to disable watching */
+    read,      /**< ready read state */
+    write,     /**< ready write state */
+    read_write
 };
 
 // deprecated!
@@ -84,11 +86,19 @@ public:
      * @return true on success
      */
     bool connect(unsigned int connect_timeout_sec = CONNECT_TIMEOUT_SEC);
-    bool exec(query &q, bool throw_on_error = true, unsigned int connect_timeout_sec = CONNECT_TIMEOUT_SEC);
-    std::shared_ptr<pg::result> exec(const std::string &query_string, const params *p = nullptr, bool throw_on_error = true, unsigned int connect_timeout_sec = CONNECT_TIMEOUT_SEC);
+    bool exec(
+            query &q,
+            bool throw_on_error = true,
+            unsigned int connect_timeout_sec = CONNECT_TIMEOUT_SEC);
+
+    std::shared_ptr<pg::result> exec(
+            const std::string &query_string,
+            const params *p = nullptr,
+            bool throw_on_error = true,
+            unsigned int connect_timeout_sec = CONNECT_TIMEOUT_SEC);
 
     /*!
-     * @brief Sends data to the server during COPY_IN state.
+     * @brief Sends data to the server during COPY_IN state (blocking mode only).
      *
      * man: The application can divide the COPY data stream into buffer loads of any convenient size.
      *  Buffer-load boundaries have no semantic significance when sending.
@@ -108,18 +118,19 @@ public:
      * @param fetch_cb callback to process fetched data row by row. Return false to emit cancel() and prevent next calls.
      * @return result containing the final status of COPY operation
      */
-    std::unique_ptr<pg::result> get_copy_data(std::function<bool(const char *buffer, int nbytes)> fetch_cb) noexcept;
+    std::unique_ptr<pg::result> on_get_copy_data(std::function<bool(const char *buffer, int nbytes)> fetch_cb) noexcept;
 
     // TODO implement async COPY
 
     // ASYNC API
-    int socket() const noexcept { return _conn ? PQsocket(_conn) : -1; }
+    int socket() const noexcept;
     void connect_async() noexcept;
     void exec_async(std::shared_ptr<pg::query> q) noexcept;
 
 private:
     enum class async_stage { none, connecting, sending_query, flush, wait_ready_read };
-    connection(const std::string &connection_string, std::function<void(connection*, std::string&, dbmode)> db_state_detected_cb);
+    connection(const std::string &connection_string,
+               std::function<void(connection*, std::string&, dbmode)> db_state_detected_cb);
 
     PGconn *_conn = nullptr;
     async_stage _async_stage = async_stage::none;
@@ -135,12 +146,35 @@ private:
 
     std::function<void(const connection &cn)> _connected_cb;
     std::function<void(const connection &cn)> _before_disconnect_cb;
-    static std::function<void(const connection &cn, const std::string &severity, const std::string &message, const std::string &hint)> _notice_cb_global;
-    std::function<void(const void *sender, const std::string &error, const pg::result *res)> _error_cb;
+
+    static std::function<void(
+            const connection &cn,
+            const std::string &severity,
+            const std::string &message,
+            const std::string &hint
+            )> _notice_cb_global;
+
+    /** preferred error handler */
+    std::function<void(
+            const void *sender,
+            const std::string &error,
+            const pg::result *res
+            )> _error_cb;
+
+    static std::function<void(
+            const void *sender,
+            const std::string &error,
+            const pg::result *res
+            )> _error_cb_global;
+
     std::function<void(int, const std::string&, const std::string&)> _notify_cb;
 
+    void handle_error(const pg::result *res = nullptr) noexcept;
+
     // ASYNC API
-    std::function<void(const connection &cn, int mode)> _socket_watcher_request_cb; // should be noexcept
+
+    // need to capture watcher
+    fu2::unique_function<void(int mode) noexcept> _socket_watcher_request_cb;
     std::function<void(const connection &cn, int delay_ms)> _timer_request_cb;
     void raise_error(const std::shared_ptr<pg::result> &res = nullptr) noexcept;
     void raise_error(const std::string& error, const std::shared_ptr<pg::result> &res = nullptr) noexcept;
@@ -155,12 +189,17 @@ private:
     std::string _context;
     time_t _connection_start_moment, _last_try;  // TODO:  use these vars to enable timeouts
 
+    std::string _copy_in_buf;
+    bool _copy_in_done = false;
+    bool send_copy_data();
+
 public:
     void on_connected(decltype(_connected_cb) handler) { _connected_cb = handler; }
     void on_before_disconnect(decltype(_before_disconnect_cb) handler) { _before_disconnect_cb = handler; }
     static void on_notice_global(decltype(_notice_cb_global) handler) { _notice_cb_global = handler; }
     void on_notify(decltype(_notify_cb) handler) { _notify_cb = handler; }
     void on_error(decltype(_error_cb) handler) { _error_cb = handler; }
+    static void on_error_global(decltype(_error_cb_global) handler) { _error_cb_global = handler; }
 
     // ASYNC API
     /**
@@ -168,7 +207,7 @@ public:
      * Mandatory for async api (including notifications receiving).
      * @param handler functor to be called
      */
-    void on_socket_watcher_request(decltype(_socket_watcher_request_cb) handler) { _socket_watcher_request_cb = handler; }
+    void on_socket_watcher_request(decltype(_socket_watcher_request_cb) &&handler);
 
     /** External socket watcher must call this function on ready read state detected. */
     void ready_read_socket();

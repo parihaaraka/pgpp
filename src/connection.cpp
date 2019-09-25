@@ -12,9 +12,25 @@ namespace pg
 
 using namespace std;
 
-std::function<void(const connection &cn, const std::string &severity, const std::string &message, const std::string &hint)> connection::_notice_cb_global = nullptr;
+std::function<void(
+        const connection &cn,
+        const std::string &severity,
+        const std::string &message,
+        const std::string &hint
+        )> connection::_notice_cb_global = nullptr;
 
-shared_ptr<result> query_error::result() const
+std::function<void(
+        const void *sender,
+        const std::string &error,
+        const pg::result *res
+        )> connection::_error_cb_global = nullptr;
+
+query_error::query_error(std::shared_ptr<pg::result> res)
+    : std::runtime_error(PQresultErrorMessage(res->result_ptr())), _res(res)
+{
+}
+
+shared_ptr<pg::result> query_error::result() const
 {
     return _res;
 }
@@ -59,6 +75,24 @@ void connection::fetch_notifications()
     }
 }
 
+void connection::handle_error(const result *res) noexcept
+{
+    if (_error_cb)
+    {
+        try
+        {
+            _error_cb(this, _last_error, res);
+        } catch (...) {}
+    }
+    else if (_error_cb_global)
+    {
+        try
+        {
+            _error_cb_global(this, _last_error, res);
+        } catch (...) {}
+    }
+}
+
 void connection::fetch()
 {
     bool is_notification = is_idle();
@@ -95,8 +129,8 @@ void connection::fetch()
             if (!_suspended_query && _async_stage == async_stage::none)
             {
                 _q = nullptr;
-                _socket_watcher_request_cb(*this, _channels.empty() ?
-                                               pg::socket_watch_mode::none : pg::socket_watch_mode::read);
+                _socket_watcher_request_cb(_channels.empty() ?
+                                               socket_watch_mode::none : socket_watch_mode::read);
             }
 
             if (_q_tmp && _q_tmp->query_finished_async_cb)
@@ -115,6 +149,15 @@ void connection::fetch()
             PQclear(tmp_res);
             _temp_result = nullptr;
             continue;
+        }
+
+        if (status == PGRES_COPY_IN)
+        {
+            _last_error.clear();
+            _temp_result = make_shared<pg::result>(tmp_res);
+            if (send_copy_data())
+                return;
+            continue;  // error (need to fetch empty resultset)
         }
 
         // in case of error the result contains error's details,
@@ -149,13 +192,7 @@ void connection::fetch()
                                     PQgetisnull(tmp_res, 0, i) ? -1 : PQgetlength(tmp_res, 0, i)))
                     { // ?
                         _last_error = PQerrorMessage(_conn);
-                        if (_error_cb)
-                        {
-                            try
-                            {
-                                _error_cb(this, _last_error, nullptr);
-                            } catch (...) {}
-                        }
+                        handle_error();
                     }
                 }
                 ++last_row_num;
@@ -179,13 +216,7 @@ void connection::fetch()
             if (status == PGRES_FATAL_ERROR) // erroneous resultset
             {
                 _last_error = full_message(_temp_result->result_ptr());
-                if (_error_cb)
-                {
-                    try
-                    {
-                        _error_cb(this, _last_error, _temp_result.get());
-                    } catch (...) {}
-                }
+                handle_error(_temp_result.get());
             }
 
             // invalidate intermediate resultset pointer
@@ -237,13 +268,7 @@ void connection::disconnect(bool call_disconnect_handler) noexcept
 
     // stop socket watcher
     if (_socket_watcher_request_cb)
-    {
-        try // go further in any case
-        {
-            _socket_watcher_request_cb(*this, socket_watch_mode::none);
-        }
-        catch (...) {}
-    }
+        _socket_watcher_request_cb(socket_watch_mode::none);
 
     if (_before_disconnect_cb && call_disconnect_handler)
     {
@@ -321,25 +346,15 @@ string encrypt_password(const string &password, const string &user)
     return enc_pwd;
 }
 
-void connection::raise_error(const std::shared_ptr<result> &res) noexcept
+void connection::raise_error(const std::shared_ptr<pg::result> &res) noexcept
 {
     _async_stage = async_stage::none;
     if (is_connected() && _socket_watcher_request_cb)
     {
-        try
-        {
-            _socket_watcher_request_cb(*this, _channels.empty() ?
-                                           pg::socket_watch_mode::none : pg::socket_watch_mode::read);
-        } catch (...) {}
+        _socket_watcher_request_cb(_channels.empty() ?
+                                       socket_watch_mode::none : socket_watch_mode::read);
     }
-
-    if (_error_cb)
-    {
-        try
-        {
-            _error_cb(this, _last_error, res.get());
-        } catch (...) {}
-    }
+    handle_error(res.get());
 
     // clear query object to avoid execution on reconnect
     // and to allow sequental execution via query_finished_async_cb
@@ -353,7 +368,7 @@ void connection::raise_error(const std::shared_ptr<result> &res) noexcept
     }
 }
 
-void connection::raise_error(const string &error, const std::shared_ptr<result> &res) noexcept
+void connection::raise_error(const string &error, const std::shared_ptr<pg::result> &res) noexcept
 {
     _last_error = error;
     raise_error(res);
@@ -365,14 +380,14 @@ void connection::async_connection_proceed()
     switch (state)
     {
     case PGRES_POLLING_READING:
-        _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+        _socket_watcher_request_cb(socket_watch_mode::read);
         break;
     case PGRES_POLLING_WRITING:
-        _socket_watcher_request_cb(*this, pg::socket_watch_mode::write);
+        _socket_watcher_request_cb(socket_watch_mode::write);
         break;
     case PGRES_POLLING_FAILED:
         // connection failed
-        _socket_watcher_request_cb(*this, pg::socket_watch_mode::none);
+        _socket_watcher_request_cb(socket_watch_mode::none);
         if (_db_state_detected_cb)
         {
             _db_state_detected_cb(dbmode::na);
@@ -406,7 +421,7 @@ void connection::async_connection_proceed()
             else if (_q)
                 exec_async(_q);
             else
-                _socket_watcher_request_cb(*this, pg::socket_watch_mode::none);
+                _socket_watcher_request_cb(socket_watch_mode::none);
         }
         break;
     }
@@ -416,7 +431,7 @@ void connection::async_validate_rw_mode()
 {
     if (_q)
         _suspended_query = move(_q);
-    _q = make_shared<pg::query>();
+    _q = make_shared<query>();
     *_q = "select pg_is_in_recovery()::int::text";
     _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query> q, const std::string &error)
     {
@@ -451,7 +466,7 @@ void connection::async_validate_rw_mode()
             else if (cn._q) // run initial query
                 cn.exec_async(cn._q);
             else
-                cn._socket_watcher_request_cb(cn, pg::socket_watch_mode::none);
+                cn._socket_watcher_request_cb(socket_watch_mode::none);
             return;
         }
 
@@ -469,7 +484,7 @@ void connection::async_restore_listen_channels()
 {
     if (_q)
         _suspended_query = move(_q);
-    _q = make_shared<pg::query>();
+    _q = make_shared<query>();
     for (string &ch : _channels)
         _q->query_string += "LISTEN " + ch + ';';
     _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query>, const std::string &)
@@ -479,9 +494,79 @@ void connection::async_restore_listen_channels()
         if (cn._q) // run initial query
             cn.exec_async(cn._q); // entire cycle will start (reconnect and so on) in case of error
         else
-            cn._socket_watcher_request_cb(cn, pg::socket_watch_mode::read);
+            cn._socket_watcher_request_cb(socket_watch_mode::read);
     };
     exec_async(_q);
+}
+
+bool connection::send_copy_data()
+{
+    if (!_q || !_q->copy_in_cb)
+    {
+        _copy_in_done = true;
+    }
+    else
+    {
+        if (!_copy_in_done && _copy_in_buf.empty())
+            _copy_in_done = _q->copy_in_cb(_copy_in_buf);
+
+        while (!_copy_in_buf.empty())
+        {
+            auto res = PQputCopyData(_conn, _copy_in_buf.data(), static_cast<int>(_copy_in_buf.size()));
+            if (res < 0)
+            {
+                _copy_in_buf.clear();
+                _temp_result.reset();
+                _copy_in_done = false;
+
+                _last_error = PQerrorMessage(_conn);
+                handle_error();
+                return false;
+            }
+            else if (res == 0)
+            {
+                _socket_watcher_request_cb(socket_watch_mode::write);
+                return true;
+            }
+            else
+            {
+                _copy_in_buf.clear();
+                _copy_in_done = _q->copy_in_cb(_copy_in_buf);
+            }
+        }
+    }
+
+    if (_copy_in_done)
+    {
+        _last_error.clear();
+        auto res = PQputCopyEnd(_conn, nullptr);
+        if (res < 0)
+        {
+            _temp_result.reset();
+            _copy_in_done = false;
+
+            _last_error = PQerrorMessage(_conn);
+            handle_error();
+            return false;
+        }
+        else if (res == 0)
+        {
+            // man:
+            // If the value is zero, wait for write-ready and try again.
+            _socket_watcher_request_cb(socket_watch_mode::write);
+        }
+        else
+        {
+            _async_stage = async_stage::flush;
+            _socket_watcher_request_cb(socket_watch_mode::write);
+        }
+    }
+    return true;
+}
+
+void connection::on_socket_watcher_request(decltype(_socket_watcher_request_cb) &&handler)
+{
+    _socket_watcher_request_cb = move(handler);
 }
 
 void connection::connect_async() noexcept
@@ -549,16 +634,7 @@ void connection::connect_async() noexcept
     }
     _async_stage = async_stage::connecting;
 
-    try
-    {
-        _socket_watcher_request_cb(*this, pg::socket_watch_mode::write);
-    }
-    catch (...)
-    {
-        raise_error("pgdb: unable to poll socket\n");
-        PQfinish(_conn);
-        _conn = nullptr;
-    }
+    _socket_watcher_request_cb(socket_watch_mode::write);
 }
 
 void connection::exec_async(std::shared_ptr<query> q) noexcept
@@ -566,14 +642,7 @@ void connection::exec_async(std::shared_ptr<query> q) noexcept
     // do not change current query state
     auto safe_raise = [this, &q](const string& error)
     {
-        if (_error_cb)
-        {
-            try
-            {
-                _error_cb(this, error, nullptr);
-            } catch (...) {}
-        }
-
+        handle_error();
         if (q && q->query_finished_async_cb)
         {
             try
@@ -651,18 +720,18 @@ void connection::exec_async(std::shared_ptr<query> q) noexcept
         if (res < 0)    // error
         {
             _async_stage = async_stage::none;
-            _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+            _socket_watcher_request_cb(socket_watch_mode::read);
         }
         else
         {
             if (!res)
             {
                 _async_stage = async_stage::wait_ready_read;
-                _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+                _socket_watcher_request_cb(socket_watch_mode::read);
             }
             else
             {
-                _socket_watcher_request_cb(*this, pg::socket_watch_mode::read | pg::socket_watch_mode::write);
+                _socket_watcher_request_cb(socket_watch_mode::read_write);
             }
             return;
         }
@@ -811,8 +880,7 @@ bool connection::connect(unsigned int connect_timeout_sec)
         {
             for(auto const &e: errors)
                 _last_error += e.first + ": " + e.second;
-            if (_error_cb)
-                _error_cb(this, _last_error, nullptr);
+            handle_error();
         }
         return false;
     }
@@ -837,8 +905,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
     auto raise_error = [this, throw_on_error](string&& error, const shared_ptr<pg::result> &res = shared_ptr<pg::result>())
     {
         _last_error = error;
-        if (_error_cb)
-            _error_cb(this, _last_error, res.get());
+        handle_error(res.get());
         if (throw_on_error)
         {
             if (res)
@@ -859,7 +926,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
     q.results.clear();
     // suspend external socket watcher
     if (_socket_watcher_request_cb)
-        _socket_watcher_request_cb(*this, pg::socket_watch_mode::none);
+        _socket_watcher_request_cb(socket_watch_mode::none);
 
     // ***** DIRTY HACK to grant existence of _q to call it's notice handler
     _q = std::shared_ptr<query>(&q, [](query*) { /* do nothing */ });
@@ -922,9 +989,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
                     _db_state_detected_cb(dbmode::ro);
                     if (!_current_cs.empty())
                     {
-                        if (_error_cb)
-                            _error_cb(this, _last_error, result.get());
-
+                        handle_error(result.get());
                         disconnect();
                         // reconnect and try again
                         continue;
@@ -933,16 +998,14 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
                 // deadlock_detected | serialization_failure
                 else if (state == "40P01" || state == "40001")
                 {
-                    if (_error_cb)
-                        _error_cb(this, _last_error, result.get());
-
+                    handle_error(result.get());
                     continue;
                 }
             }
 
             // restore watching socket to receive notifications
             if (_socket_watcher_request_cb && !_channels.empty())
-                _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+                _socket_watcher_request_cb(socket_watch_mode::read);
             if (tmp_res)
             {
                 q.results.push_back(result); // error details
@@ -958,7 +1021,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
 
         // restore watching socket to receive notifications
         if (_socket_watcher_request_cb && !_channels.empty())
-            _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+            _socket_watcher_request_cb(socket_watch_mode::read);
         break;
     }
     while (true);
@@ -966,7 +1029,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
     return true;
 }
 
-std::shared_ptr<result> connection::exec(const string &query_string, const params *p, bool throw_on_error, unsigned int connect_timeout_sec)
+std::shared_ptr<pg::result> connection::exec(const string &query_string, const params *p, bool throw_on_error, unsigned int connect_timeout_sec)
 {
     query q;
     q = query_string;
@@ -986,8 +1049,7 @@ bool connection::put_copy_data(const char *buffer, int nbytes, bool throw_on_err
     if (PQputCopyData(_conn, buffer, nbytes) < 0)
     {
         _last_error = PQerrorMessage(_conn);
-        if (_error_cb)
-            _error_cb(this, _last_error, nullptr);
+        handle_error();
 
         if (throw_on_error)
             throw runtime_error(_last_error);
@@ -996,7 +1058,7 @@ bool connection::put_copy_data(const char *buffer, int nbytes, bool throw_on_err
     return true;
 }
 
-std::unique_ptr<result> connection::stop_copy_in(const char *stop_reason)
+std::unique_ptr<pg::result> connection::stop_copy_in(const char *stop_reason)
 {
     _last_error.clear();
     // PQputCopyEnd returns 0 (could not queue the termination message because of full buffers)
@@ -1004,20 +1066,19 @@ std::unique_ptr<result> connection::stop_copy_in(const char *stop_reason)
     if (PQputCopyEnd(_conn, stop_reason) < 0)
     {
         _last_error = PQerrorMessage(_conn);
-        if (_error_cb)
-            _error_cb(this, _last_error, nullptr);
+        handle_error();
         return nullptr;
     }
 
     // Acquire PGresult. We must call PQgetResult until nullptr returned.
     // All hope that we will get a single PGresult because we can do nothing with other PGresults.
-    auto res = std::unique_ptr<result>(new result(PQgetResult(_conn)));
+    auto res = std::unique_ptr<pg::result>(new pg::result(PQgetResult(_conn)));
     while (PGresult *tmp_res = PQgetResult(_conn))
         PQclear(tmp_res);
     return res;
 }
 
-std::unique_ptr<result> connection::get_copy_data(std::function<bool(const char *, int)> fetch_cb) noexcept
+std::unique_ptr<pg::result> connection::on_get_copy_data(std::function<bool(const char *, int)> fetch_cb) noexcept
 {
     _last_error.clear();
     char *buf;
@@ -1062,22 +1123,21 @@ std::unique_ptr<result> connection::get_copy_data(std::function<bool(const char 
     if (len == -2)
     {
         _last_error = PQerrorMessage(_conn);
-        if (_error_cb)
-        {
-            try
-            {
-                _error_cb(this, _last_error, nullptr);
-            } catch (...) {}
-        }
+        handle_error();
         return nullptr;
     }
 
     // Acquire PGresult. We must call PQgetResult until nullptr returned.
     // All hope that we will get a single PGresult because we can do nothing with other PGresults.
-    auto res = std::unique_ptr<result>(new result(PQgetResult(_conn)));
+    auto res = std::unique_ptr<pg::result>(new pg::result(PQgetResult(_conn)));
     while (PGresult *tmp_res = PQgetResult(_conn))
         PQclear(tmp_res);
     return res;
+}
+
+int connection::socket() const noexcept
+{
+    return _conn ? PQsocket(_conn) : -1;
 }
 
 void connection::listen(const std::vector<string> &channels)
@@ -1089,8 +1149,8 @@ void connection::listen(const std::vector<string> &channels)
         for (string &ch : _channels) q += "LISTEN " + ch + ';';
         exec(q, nullptr, false);
         if (_socket_watcher_request_cb)
-            _socket_watcher_request_cb(*this, _channels.empty() ?
-                                           pg::socket_watch_mode::none : pg::socket_watch_mode::read);
+            _socket_watcher_request_cb(_channels.empty() ?
+                                           socket_watch_mode::none : socket_watch_mode::read);
     }
 }
 
@@ -1110,10 +1170,9 @@ void connection::ready_read_socket()
             return;
         }
         _last_error = PQerrorMessage(_conn);
-        if (_error_cb)
-            _error_cb(this, _last_error, nullptr);
+        handle_error();
         _async_stage = async_stage::none;
-        _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+        _socket_watcher_request_cb(socket_watch_mode::read);
     }
     // async query is fetching result or notification received
     else if (_async_stage == async_stage::wait_ready_read || is_idle())
@@ -1139,19 +1198,28 @@ void connection::ready_write_socket()
         {
             if (!res)
             {
+                if (_copy_in_done)
+                {
+                    _copy_in_done = false;
+                    _temp_result.reset();
+                }
                 _async_stage = async_stage::wait_ready_read;
-                _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+                _socket_watcher_request_cb(socket_watch_mode::read);
                 return;
             }
             // current mode is rw
             return;
         }
         _last_error = PQerrorMessage(_conn);
-        if (_error_cb)
-            _error_cb(this, _last_error, nullptr);
+        handle_error();
         _async_stage = async_stage::none;
     }
-    _socket_watcher_request_cb(*this, pg::socket_watch_mode::read);
+    else if (_temp_result && _temp_result->copy_in_ready())
+    {
+        send_copy_data();
+    }
+
+    _socket_watcher_request_cb(socket_watch_mode::read);
 }
 
 } // namespace pg

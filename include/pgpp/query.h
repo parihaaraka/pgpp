@@ -49,6 +49,12 @@ public:
 
     std::function<void(const connection &cn, const std::string &severity, const std::string &message, const std::string &hint)> notice_cb;
 
+    /*!
+     * \brief Callback to be called when connection's socket becomes writable.
+     * \param copy_in_cb The callback must return true to finalize writing.
+     */
+    std::function<bool(std::string &buf)> copy_in_cb;
+
     void clear()
     {
         query_string.clear();
@@ -60,6 +66,7 @@ public:
         resultset_fetched_async_cb = nullptr;
         row_fetched_async_cb = nullptr;
         notice_cb = nullptr;
+        copy_in_cb = nullptr;
     }
 };
 
