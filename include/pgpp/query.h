@@ -20,7 +20,7 @@ public:
     std::string query_string;
     pg::params params;
     bool throw_on_error = false;
-    std::deque<std::shared_ptr<result>> results;
+    std::vector<std::shared_ptr<result>> results;
 
     /**
      * @brief On query finished callback.
@@ -50,10 +50,10 @@ public:
     std::function<void(const connection &cn, const std::string &severity, const std::string &message, const std::string &hint)> notice_cb;
 
     /*!
-     * \brief Callback to be called when connection's socket becomes writable.
+     * \brief Callback to ask a caller for COPY IN data.
      * \param copy_in_cb The callback must return true to finalize writing.
      */
-    std::function<bool(std::string &buf)> copy_in_cb;
+    fu2::unique_function<bool(std::string &buf)> copy_in_cb;
 
     void clear()
     {

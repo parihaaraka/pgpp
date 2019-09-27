@@ -1,4 +1,4 @@
-#include <ev++.h>
+#include <ev.h>
 #include "pgpp/dbpool.h"
 #include "pgpp/connection.h"
 #include "pgpp/query.h"
@@ -10,9 +10,14 @@
 using namespace std;
 
 static shared_ptr<pg::connection> _cn;
-static ev::io _db_connection_watcher;
-static ev::async _reinit_db_guard_watcher;
-static ev::sig _term_signal_watcher;
+static ev_io _db_connection_watcher;
+static ev_async _reinit_db_guard_watcher;
+static ev_signal _term_signal_watcher;
+static struct ev_loop *_loop;
+
+//static ev::io _db_connection_watcher;
+//static ev::async _reinit_db_guard_watcher;
+//static ev::sig _term_signal_watcher;
 
 #define RESET   "\033[0m"
 #define BLACK   "\033[30m"      /* Black */
@@ -48,7 +53,16 @@ string currentTime()
     return string(buffer);
 }
 
-void reinit_db_cb(struct ev_loop *, ev_async *, int)
+static void socket_event_cb(struct ev_loop *, ev_io *w, int revents)
+{
+    pg::connection *cn = static_cast<pg::connection*>(w->data);
+    if (revents & EV_WRITE)
+        cn->ready_write_socket();
+    if (revents & EV_READ)
+        cn->ready_read_socket();
+}
+
+void reinit_db_cb(struct ev_loop *loop, ev_async *, int)
 {
     cout << BOLDWHITE << "### DB REINIT..." << RESET << endl;
     if (_cn)
@@ -57,7 +71,7 @@ void reinit_db_cb(struct ev_loop *, ev_async *, int)
             throw runtime_error("wtf? current connection is active!");
         // old connection will get back to the pool so make it clean
         _cn->disconnect();
-        _cn->on_socket_watcher_request(nullptr);
+        _cn->on_socket_watcher_request({});
         _cn->on_connected(nullptr);
         _cn->on_before_disconnect(nullptr);
         _cn->on_notify(nullptr);
@@ -65,6 +79,7 @@ void reinit_db_cb(struct ev_loop *, ev_async *, int)
     }
     // replace connection with new one
     _cn = dbpool<pg::connection>::get()->get_connection(true);
+    _db_connection_watcher.data = _cn.get();
     _cn->disconnect(); // to fire on_connected
     _cn->listen({"job_ready", "telegram"});
 
@@ -97,7 +112,7 @@ void reinit_db_cb(struct ev_loop *, ev_async *, int)
         cout << RESET;
     });
 
-    _cn->on_socket_watcher_request([](const pg::connection &cn, int mode)
+    _cn->on_socket_watcher_request([](int mode) noexcept
     {
         int events =
                 (mode & pg::socket_watch_mode::read  ? EV_READ  : 0) |
@@ -106,31 +121,19 @@ void reinit_db_cb(struct ev_loop *, ev_async *, int)
                 (mode & pg::socket_watch_mode::read ? "R" : "") <<
                 (mode & pg::socket_watch_mode::write ? "W" : "") <<
                 (mode ? "" : "none") << endl;
-        if (_db_connection_watcher.is_active())
+        if (ev_is_active(&_db_connection_watcher))
         {
              if ((_db_connection_watcher.events & (EV_READ | EV_WRITE)) == events)
                  return;
-             _db_connection_watcher.loop.ref();
-             _db_connection_watcher.stop();
+             ev_ref(_loop);
+             ev_io_stop(_loop, &_db_connection_watcher);
         }
         if (!events)
             return;
-        _db_connection_watcher.set_(&_cn, [](struct ev_loop *, ev_io *w, int revents)
-        {
-            auto cn = reinterpret_cast<shared_ptr<pg::connection>*>(w->data);
-            if (revents & EV_READ)
-            {
-                cout << "* ready_read" << endl;
-                (*cn)->ready_read_socket();
-            }
-            else if (revents & EV_WRITE)
-            {
-                cout << "* ready_write" << endl;
-                (*cn)->ready_write_socket();
-            }
-        });
-        _db_connection_watcher.start(cn.socket(), events);
-        _db_connection_watcher.loop.unref();
+
+        ev_io_set(&_db_connection_watcher, _cn->socket(), events);
+        ev_io_start(_loop, &_db_connection_watcher);
+        ev_unref(_loop);
     });
 
     _cn->on_connected([](const pg::connection &)
@@ -172,19 +175,61 @@ shared_ptr<pg::query> create_query()
     qobj->query_finished_async_cb = [](pg::connection &, std::shared_ptr<pg::query> , const std::string &)
     {
         cout << currentTime() << BOLDCYAN << "query finished" << RESET << endl;
-        _term_signal_watcher.stop();
+        ev_signal_stop(_loop, &_term_signal_watcher);
         cout << currentTime() << "SIGTERM watcher stopped" << endl;
     };
 
     return qobj;
 }
 
+static void timer_cb(struct ev_loop *loop, ev_timer *w, int)
+{
+    if (!_cn->is_idle())
+    {
+        cout << currentTime() << "db connection is busy -> delay for 500 msec" << endl;
+        w->repeat = 0.5;
+    }
+    else
+    {
+        auto qobj = create_query();
+        qobj->query_string = *static_cast<const string*>(w->data);
+
+        qobj->query_finished_async_cb = [loop](pg::connection &, std::shared_ptr<pg::query> , const std::string &)
+        {
+            cout << currentTime() << BOLDCYAN << "query finished" << RESET << endl;
+
+            static int count = 0;
+            if (++count == 1)   // reinit test
+                ev_async_send(loop, &_reinit_db_guard_watcher);
+
+            // stop after specified retries without SIGTERM
+            // (event loop terminates on last watcher stop)
+            if (count == 2)
+            {
+                ev_signal_stop(loop, &_term_signal_watcher);
+                cout << currentTime() << "SIGTERM watcher stopped" << endl;
+            }
+
+        };
+
+        cout << currentTime() <<
+                BOLDCYAN <<
+                "starting async query (" << qobj->query_string.size() << " bytes long)..." <<
+                RESET << endl;
+        _cn->exec_async(qobj);
+        w->repeat = 2;
+    }
+
+    ev_timer_again(loop, w); // restart timer with new settings
+    //ev_ref(loop); ev_timer_stop(loop, w);
+}
+
 int main(int argc, char *argv[])
 {
     const char *cs = (argc > 1 ? argv[1] : "user=postgres port=5432 connect_timeout=5");
     dbpool<pg::connection>::get()->set_connection_strings({cs});
-    ev::default_loop _loop;
-    ev::timer periodic_timer;
+    _loop = EV_DEFAULT;
+    ev_init(&_db_connection_watcher, socket_event_cb);
 
     // copy to
     {
@@ -203,7 +248,7 @@ int main(int argc, char *argv[])
             }
             else if (_cn->exec(*qobj.get()) && qobj->results.back()->copy_out_ready())
             {
-                auto res = _cn->get_copy_data([&](const char *buf, int nbytes) -> bool
+                auto res = _cn->on_get_copy_data([&](const char *buf, int nbytes) -> bool
                 {
                     if (!i)
                         r1fetched = currentTime();
@@ -286,64 +331,25 @@ from (values
 ('last', 'row', 0)) as long_query(x, y, z)
          )";
 
-    _term_signal_watcher.set_(nullptr, [](struct ev_loop *loop, ev_signal *w, int)
+    ev_signal_init(&_term_signal_watcher, [](struct ev_loop *loop, ev_signal *w, int)
     {
         ev_signal_stop(loop, w);
         cout << currentTime() << "SIGTERM watcher stopped" << endl;
-    });
-    _term_signal_watcher.start(SIGTERM);
+    }, SIGTERM);
+    ev_signal_start(_loop, &_term_signal_watcher);
 
-    periodic_timer.set_(&q, [](struct ev_loop *loop, ev_timer *w, int)
-    {
-        if (!_cn->is_idle())
-        {
-            cout << currentTime() << "db connection is busy -> delay for 500 msec" << endl;
-            w->repeat = 0.5;
-        }
-        else
-        {
-            auto qobj = create_query();
-            qobj->query_string = *static_cast<const string*>(w->data);
+    ev_timer periodic_timer;
+    ev_timer_init(&periodic_timer, timer_cb, 0, 0);
+    periodic_timer.data = &q;
+    ev_timer_start(_loop, &periodic_timer);
+    ev_unref(_loop);
 
-            qobj->query_finished_async_cb = [](pg::connection &, std::shared_ptr<pg::query> , const std::string &)
-            {
-                cout << currentTime() << BOLDCYAN << "query finished" << RESET << endl;
+    ev_async_init(&_reinit_db_guard_watcher, reinit_db_cb);
+    ev_async_start(_loop, &_reinit_db_guard_watcher);
+    ev_unref(_loop);
+    ev_async_send(_loop, &_reinit_db_guard_watcher);
 
-                static int count = 0;
-                if (++count == 1)   // reinit test
-                    _reinit_db_guard_watcher.send();
-
-                // stop after specified retries without SIGTERM
-                // (event loop terminates on last watcher stop)
-                if (count == 2)
-                {
-                    _term_signal_watcher.stop();
-                    cout << currentTime() << "SIGTERM watcher stopped" << endl;
-                }
-
-            };
-
-            cout << currentTime() <<
-                    BOLDCYAN <<
-                    "starting async query (" << qobj->query_string.size() << " bytes long)..." <<
-                    RESET << endl;
-            _cn->exec_async(qobj);
-            w->repeat = 2;
-        }
-
-        ev_timer_again(loop, w); // restart timer with new settings
-        //ev_ref(loop); ev_timer_stop(loop, w);
-    });
-    periodic_timer.set(0, 0);
-    periodic_timer.start();
-    periodic_timer.loop.unref();
-
-    _reinit_db_guard_watcher.set_(nullptr, reinit_db_cb);
-    _reinit_db_guard_watcher.start();
-    _reinit_db_guard_watcher.loop.unref();
-    _reinit_db_guard_watcher.send();
-
-    _loop.run();
+    ev_run(_loop, 0);
     return 0;
 }
 

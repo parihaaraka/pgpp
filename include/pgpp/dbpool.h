@@ -356,15 +356,16 @@ private:
     // search for suitable node
     std::shared_ptr<dbnode> find_node(dbmode wanted_mode)
     {
-        // do not strain if there is nothing to choose
-        if (_nodes.size() == 1)
-            return (*_nodes.begin()).second;
-
         std::shared_ptr<dbnode> new_node;
+        auto now = std::chrono::system_clock::now();
+
+        //if (_nodes.size() == 1)
+        //    return _nodes.begin()->second;
+
         for (auto& npair :_nodes)
         {
-            std::shared_ptr<dbnode> &n = npair.second;
-            if (n->next_try >= std::chrono::system_clock::now() && n->mode == dbmode::na)
+            auto &n = npair.second;
+            if (n->next_try >= now && n->mode == dbmode::na)
                 continue;
 
             if (n->mode != dbmode::ro || wanted_mode == dbmode::ro)

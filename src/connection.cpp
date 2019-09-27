@@ -12,6 +12,9 @@ namespace pg
 
 using namespace std;
 
+std::function<void(connection*)> connection::_on_construct_global_cb;
+std::function<void(connection*)> connection::_on_destruct_global_cb;
+
 std::function<void(
         const connection &cn,
         const std::string &severity,
@@ -38,10 +41,12 @@ shared_ptr<pg::result> query_error::result() const
 connection::connection(const string &connection_string)
     : _current_cs(connection_string)
 {
+    if (_on_construct_global_cb)
+        _on_construct_global_cb(this);
 }
 
 connection::connection(const string &connection_string, function<void(connection*, string&, dbmode)> db_state_detected_cb)
-    : _current_cs(connection_string)
+    : connection(connection_string)
 {
     if (db_state_detected_cb)
         _db_state_detected_cb = std::bind(db_state_detected_cb, this, ref(_current_cs), placeholders::_1);
@@ -50,6 +55,19 @@ connection::connection(const string &connection_string, function<void(connection
 connection::~connection()
 {
     disconnect();
+    try
+    {
+        if (_on_destruct_cb)
+            _on_destruct_cb();
+        else if (_on_destruct_global_cb)
+            _on_destruct_global_cb(this);
+    }
+    catch (const exception &e)
+    {
+        _last_error = e.what();
+        handle_error();
+    }
+    catch (...) {}
 }
 
 void connection::notice_receiver(void *arg, const PGresult *res)
@@ -122,7 +140,7 @@ void connection::fetch()
             _async_stage = async_stage::none;
 
             // backup query pointer for callback
-            auto _q_tmp = move(_q);
+            auto q_tmp = _q;
 
             // clear query object to avoid execution on reconnect
             // and to allow sequental execution via query_finished_async_cb
@@ -133,11 +151,11 @@ void connection::fetch()
                                                socket_watch_mode::none : socket_watch_mode::read);
             }
 
-            if (_q_tmp && _q_tmp->query_finished_async_cb)
+            if (q_tmp && q_tmp->query_finished_async_cb)
             {
                 try
                 {
-                    _q_tmp->query_finished_async_cb(*this, _q_tmp, _last_error);
+                    q_tmp->query_finished_async_cb(*this, q_tmp, _last_error);
                 } catch (...) {}
             }
             break;
@@ -296,6 +314,7 @@ bool connection::cancel() noexcept
 
 bool connection::is_idle() const noexcept
 {
+    // nullptr _conn is ok here
     int status = PQtransactionStatus(_conn);
     return !_conn || status == PQTRANS_IDLE || status == PQTRANS_UNKNOWN;
 }
@@ -349,21 +368,22 @@ string encrypt_password(const string &password, const string &user)
 void connection::raise_error(const std::shared_ptr<pg::result> &res) noexcept
 {
     _async_stage = async_stage::none;
-    if (is_connected() && _socket_watcher_request_cb)
+    if (_socket_watcher_request_cb)
     {
-        _socket_watcher_request_cb(_channels.empty() ?
-                                       socket_watch_mode::none : socket_watch_mode::read);
+        _socket_watcher_request_cb(is_connected() && !_channels.empty() ?
+                                       socket_watch_mode::read :
+                                       socket_watch_mode::none);
     }
     handle_error(res.get());
 
     // clear query object to avoid execution on reconnect
     // and to allow sequental execution via query_finished_async_cb
-    auto _q_tmp = move(_q);
-    if (_q_tmp && _q_tmp->query_finished_async_cb)
+    auto q_tmp = move(_q);
+    if (q_tmp && q_tmp->query_finished_async_cb)
     {
         try
         {
-            _q_tmp->query_finished_async_cb(*this, _q_tmp, _last_error);
+            q_tmp->query_finished_async_cb(*this, q_tmp, _last_error);
         } catch (...) {}
     }
 }
@@ -385,22 +405,30 @@ void connection::async_connection_proceed()
     case PGRES_POLLING_WRITING:
         _socket_watcher_request_cb(socket_watch_mode::write);
         break;
-    case PGRES_POLLING_FAILED:
-        // connection failed
+    case PGRES_POLLING_FAILED: // connection failed
+    {
         _socket_watcher_request_cb(socket_watch_mode::none);
+        string error = PQerrorMessage(_conn);
+
+        // prev comment here (why?!): "do not release _conn here to avoid error 'connection pointer is NULL'"
+        PQfinish(_conn);
+        _conn = nullptr;
+
+        _async_stage = async_stage::none;
         if (_db_state_detected_cb)
         {
+            //string prev_cs = _current_cs;
             _db_state_detected_cb(dbmode::na);
-            if (!_current_cs.empty())
+            if (!_current_cs.empty())// && prev_cs != _current_cs)
             {
                 _async_stage = async_stage::none;
                 connect_async();
                 break;
             }
         }
-        raise_error(PQerrorMessage(_conn));
-        // do not release _conn here to avoid error "connection pointer is NULL"
+        raise_error(error);
         break;
+    }
     default:    // PGRES_POLLING_OK
         // successful connection
         _async_stage = async_stage::none;
@@ -564,7 +592,22 @@ bool connection::send_copy_data()
     return true;
 }
 
-void connection::on_socket_watcher_request(decltype(_socket_watcher_request_cb) &&handler)
+void connection::on_construct_global(const std::function<void(connection*)> &handler)
+{
+    _on_construct_global_cb = move(handler);
+}
+
+void connection::on_destruct_global(const std::function<void(connection*)> &handler)
+{
+    _on_destruct_global_cb = move(handler);
+}
+
+void connection::on_destruct(fu2::unique_function<void()> &&handler)
+{
+    _on_destruct_cb = move(handler);
+}
+
+void connection::on_socket_watcher_request(fu2::unique_function<void(int) noexcept> &&handler)
 {
     _socket_watcher_request_cb = move(handler);
 }
@@ -669,6 +712,7 @@ void connection::exec_async(std::shared_ptr<query> q) noexcept
 
     bool was_in_transaction = (initial_state == PQTRANS_INTRANS);
     _async_stage = async_stage::sending_query;
+    q->results.clear();
     _q = q;
 
     _last_error.clear();

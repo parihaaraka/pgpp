@@ -137,6 +137,10 @@ private:
     std::shared_ptr<pg::result> _temp_result; ///< temporary resultset for asynchronous processing
     std::function<void(dbmode)> _db_state_detected_cb; ///< pooler's callback
 
+    static std::function<void(connection*)> _on_construct_global_cb;
+    static std::function<void(connection*)> _on_destruct_global_cb;
+    fu2::unique_function<void()> _on_destruct_cb;
+
     std::string _current_cs;
     std::string _last_error;
     std::vector<std::string> _channels;
@@ -201,13 +205,20 @@ public:
     void on_error(decltype(_error_cb) handler) { _error_cb = handler; }
     static void on_error_global(decltype(_error_cb_global) handler) { _error_cb_global = handler; }
 
+    /** Callback to be called on connection instantiation. */
+    static void on_construct_global(const std::function<void(connection*)> &handler);
+    /** Callback to be called on connection destruction. */
+    static void on_destruct_global(const std::function<void(connection*)> &handler);
+    /** Single instance-wide callback to be called on connection destruction. */
+    void on_destruct(fu2::unique_function<void()> &&handler);
+
     // ASYNC API
     /**
      * Callback for asking external watcher to wait for specified socket state.
      * Mandatory for async api (including notifications receiving).
      * @param handler functor to be called
      */
-    void on_socket_watcher_request(decltype(_socket_watcher_request_cb) &&handler);
+    void on_socket_watcher_request(fu2::unique_function<void(int) noexcept> &&handler);
 
     /** External socket watcher must call this function on ready read state detected. */
     void ready_read_socket();

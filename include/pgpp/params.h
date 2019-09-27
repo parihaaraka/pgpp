@@ -34,7 +34,7 @@ public:
 private:
     std::vector<const char*> _param_pointers;
     std::vector<int> _param_lengths;
-    std::deque<std::string> _temps;
+    std::vector<std::string> _temps;
 };
 
 } // namespace pg
