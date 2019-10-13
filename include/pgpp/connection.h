@@ -69,6 +69,8 @@ public:
      * Listen on specified notification channels, unlisten previous channels.
      * Subscription will be repaired in case of reconnection.
      * It's ok to call this function before connection being established.
+     * If the connection is already established, this method executes
+     * subscription query synchronously!
      */
     void listen(const std::vector<std::string> &channels);
     void disconnect(bool call_disconnect_handler = true) noexcept;
@@ -183,6 +185,7 @@ private:
     void raise_error(const std::shared_ptr<pg::result> &res = nullptr) noexcept;
     void raise_error(const std::string& error, const std::shared_ptr<pg::result> &res = nullptr) noexcept;
     void fetch();
+    void on_async_connected();
     void async_connection_proceed();
     void async_validate_rw_mode();
     void async_restore_listen_channels();

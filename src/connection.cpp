@@ -394,6 +394,32 @@ void connection::raise_error(const string &error, const std::shared_ptr<pg::resu
     raise_error(res);
 }
 
+void connection::on_async_connected()
+{
+    // set notice and warning messages handler
+    PQsetNoticeReceiver(_conn, notice_receiver, this);
+    // prevent PQsendQuery to block execution
+    PQsetnonblocking(_conn, 1);
+
+    _socket_watcher_request_cb(socket_watch_mode::none);
+    if (!_channels.empty())
+    {
+        // _connected_cb() inside
+        async_restore_listen_channels();
+        return;
+    }
+
+    auto prev_q = _q;
+    // callback on successful connection
+    if (_connected_cb)
+        _connected_cb(*this);
+
+    // if the callback has not changed current query, then
+    // restore previous state as usual
+    if (prev_q == _q && _q)
+        exec_async(_q);
+}
+
 void connection::async_connection_proceed()
 {
     PostgresPollingStatusType state = PQconnectPoll(_conn);
@@ -435,23 +461,7 @@ void connection::async_connection_proceed()
         if (_db_state_detected_cb)
             async_validate_rw_mode();
         else
-        {
-            // set notice and warning messages handler
-            PQsetNoticeReceiver(_conn, notice_receiver, this);
-            // prevent PQsendQuery to block execution
-            PQsetnonblocking(_conn, 1);
-            // callback on successful connection
-            if (_connected_cb)
-                _connected_cb(*this);
-
-            if (!_channels.empty())
-                async_restore_listen_channels();
-            else if (_q)
-                exec_async(_q);
-            else
-                _socket_watcher_request_cb(socket_watch_mode::none);
-        }
-        break;
+            on_async_connected();
     }
 }
 
@@ -481,20 +491,7 @@ void connection::async_validate_rw_mode()
         cn._q = move(cn._suspended_query);
         if (prev_cs == cn._current_cs) // ok
         {
-            // set notice and warning messages handler
-            PQsetNoticeReceiver(cn._conn, notice_receiver, &cn);
-            // prevent PQsendQuery to block execution
-            PQsetnonblocking(cn._conn, 1);
-            // callback on successful connection
-            if (cn._connected_cb)
-                cn._connected_cb(cn);
-
-            if (!cn._channels.empty())
-                cn.async_restore_listen_channels();
-            else if (cn._q) // run initial query
-                cn.exec_async(cn._q);
-            else
-                cn._socket_watcher_request_cb(socket_watch_mode::none);
+            cn.on_async_connected();
             return;
         }
 
@@ -515,8 +512,23 @@ void connection::async_restore_listen_channels()
     _q = make_shared<query>();
     for (string &ch : _channels)
         _q->query_string += "LISTEN " + ch + ';';
-    _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query>, const std::string &)
+    _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query>, const std::string &err)
     {
+        auto prev_q = cn._q;
+        if (err.empty())
+        {
+            // callback on successful connection
+            if (cn._connected_cb)
+                cn._connected_cb(cn);
+
+            // it looks like a caller initiated a new request
+            if (prev_q != cn._q)
+            {
+                cn._suspended_query.reset();
+                return;
+            }
+        }
+
         // restore suspended (initial) query
         cn._q = move(cn._suspended_query);
         if (cn._q) // run initial query
@@ -594,12 +606,12 @@ bool connection::send_copy_data()
 
 void connection::on_construct_global(const std::function<void(connection*)> &handler)
 {
-    _on_construct_global_cb = move(handler);
+    _on_construct_global_cb = handler;
 }
 
 void connection::on_destruct_global(const std::function<void(connection*)> &handler)
 {
-    _on_destruct_global_cb = move(handler);
+    _on_destruct_global_cb = handler;
 }
 
 void connection::on_destruct(fu2::unique_function<void()> &&handler)
@@ -1191,6 +1203,8 @@ void connection::listen(const std::vector<string> &channels)
     {
         string q = "UNLISTEN *;";
         for (string &ch : _channels) q += "LISTEN " + ch + ';';
+        if (_socket_watcher_request_cb)
+            _socket_watcher_request_cb(socket_watch_mode::none);
         exec(q, nullptr, false);
         if (_socket_watcher_request_cb)
             _socket_watcher_request_cb(_channels.empty() ?
