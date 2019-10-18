@@ -26,7 +26,7 @@ public:
      * @brief On query finished callback.
      * It is always called when query processing finished (in any case: success, execution error or connection error).
      */
-    std::function<void(connection &cn, std::shared_ptr<query> q, const std::string &error)> query_finished_async_cb;
+    fu2::unique_function<void(connection &cn, std::shared_ptr<query> q, const std::string &error)> query_finished_async_cb;
 
     /**
      * @brief The function is called when fetching of new resultset is started.

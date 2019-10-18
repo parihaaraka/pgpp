@@ -58,7 +58,9 @@ std::string encrypt_password(const std::string &password, const std::string &use
 /** PostgreSQL connection */
 class connection
 {
-    friend std::shared_ptr<connection> dbpool<connection>::get_connection(bool, bool);
+    //friend std::shared_ptr<connection> dbpool<connection>::get_connection(bool, bool);
+    friend class dbpool<connection>;
+    //WA for Clang compilation error. See https://bugs.llvm.org/show_bug.cgi?id=30859
 public:
     connection(const std::string &connection_string = std::string());
     ~connection();
