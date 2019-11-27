@@ -14,6 +14,9 @@ namespace pg
 class params
 {
 public:
+    params() {_temps.reserve(50);}//prevent reallocation
+    //TODO: redesign
+
     params& add(std::string &&param);
     params& add(const std::string &param);
     params& add(const char *param, int size = -1);
