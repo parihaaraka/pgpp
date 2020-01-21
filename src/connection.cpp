@@ -547,8 +547,28 @@ bool connection::send_copy_data()
     }
     else
     {
-        if (!_copy_in_done && _copy_in_buf.empty())
-            _copy_in_done = _q->copy_in_cb(_copy_in_buf);
+        auto get_more_data = [this]() -> bool
+        {
+            try
+            {
+                _copy_in_done = _q->copy_in_cb(_copy_in_buf);
+            }
+            catch (const exception &e)
+            {
+                _copy_in_buf.clear();
+                _temp_result.reset();
+                _copy_in_done = false;
+                // init server-side error
+                _copy_end_error = string("client-side error:\n") + e.what();
+                _async_stage = async_stage::put_copy_end;
+                ready_write_socket();
+                return false;
+            }
+            return true;
+        };
+
+        if (!_copy_in_done && _copy_in_buf.empty() && !get_more_data())
+            return true; // copy_in_cb error -> do not fetch right now (sending end of data marker)
 
         while (!_copy_in_buf.empty())
         {
@@ -558,7 +578,6 @@ bool connection::send_copy_data()
                 _copy_in_buf.clear();
                 _temp_result.reset();
                 _copy_in_done = false;
-
                 _last_error = PQerrorMessage(_conn);
                 handle_error();
                 return false;
@@ -568,38 +587,18 @@ bool connection::send_copy_data()
                 _socket_watcher_request_cb(socket_watch_mode::write);
                 return true;
             }
-            else
-            {
-                _copy_in_buf.clear();
-                _copy_in_done = _q->copy_in_cb(_copy_in_buf);
-            }
+
+            _copy_in_buf.clear();
+            if (!get_more_data())
+                return true;
         }
     }
 
     if (_copy_in_done)
     {
-        _last_error.clear();
-        auto res = PQputCopyEnd(_conn, nullptr);
-        if (res < 0)
-        {
-            _temp_result.reset();
-            _copy_in_done = false;
-
-            _last_error = PQerrorMessage(_conn);
-            handle_error();
-            return false;
-        }
-        else if (res == 0)
-        {
-            // man:
-            // If the value is zero, wait for write-ready and try again.
-            _socket_watcher_request_cb(socket_watch_mode::write);
-        }
-        else
-        {
-            _async_stage = async_stage::flush;
-            _socket_watcher_request_cb(socket_watch_mode::write);
-        }
+        _copy_end_error.clear();
+        _async_stage = async_stage::put_copy_end;
+        ready_write_socket();
     }
     return true;
 }
@@ -1244,6 +1243,30 @@ void connection::ready_write_socket()
     if (_async_stage == async_stage::connecting)
     {
         async_connection_proceed();
+        return;
+    }
+
+    if (_async_stage == async_stage::put_copy_end)
+    {
+        _last_error.clear();
+        auto res = PQputCopyEnd(_conn, _copy_end_error.empty() ? nullptr : _copy_end_error.c_str());
+        if (res < 0)
+        {
+            _copy_in_done = false;
+            _temp_result.reset();
+
+            _last_error = PQerrorMessage(_conn);
+            handle_error();
+            _async_stage = async_stage::none;
+            fetch();
+            return;
+        }
+
+        if (res > 0)
+            _async_stage = async_stage::flush;
+        // man:
+        // If the value is zero, wait for write-ready and try again.
+        _socket_watcher_request_cb(socket_watch_mode::write);
         return;
     }
 

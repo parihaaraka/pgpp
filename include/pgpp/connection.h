@@ -132,7 +132,16 @@ public:
     void exec_async(std::shared_ptr<pg::query> q) noexcept;
 
 private:
-    enum class async_stage { none, connecting, sending_query, flush, wait_ready_read };
+    enum class async_stage {
+        none,
+        connecting,
+        sending_query,
+        flush,
+        wait_ready_read,
+        put_copy_end
+    };
+    std::string _copy_end_error;
+
     connection(const std::string &connection_string,
                std::function<void(connection*, std::string&, dbmode)> db_state_detected_cb);
 
