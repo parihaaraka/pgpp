@@ -21,6 +21,31 @@
 
 #define CONNECT_TIMEOUT_SEC 40
 
+#if defined _WIN32 || defined __CYGWIN__
+  #ifdef BUILDING_DLL
+    #ifdef __GNUC__
+      #define DLL_PUBLIC __attribute__ ((dllexport))
+    #else
+      #define DLL_PUBLIC __declspec(dllexport)
+    #endif
+  #else
+    #ifdef __GNUC__
+      #define DLL_PUBLIC __attribute__ ((dllimport))
+    #else
+      #define DLL_PUBLIC __declspec(dllimport)
+    #endif
+  #endif
+  #define DLL_LOCAL
+#else
+  #if __GNUC__ >= 4
+    #define DLL_PUBLIC __attribute__ ((visibility ("default")))
+    #define DLL_LOCAL  __attribute__ ((visibility ("hidden")))
+  #else
+    #define DLL_PUBLIC
+    #define DLL_LOCAL
+  #endif
+#endif
+
 namespace pg
 {
 
@@ -28,7 +53,7 @@ class params;
 class query;
 
 /** PostgreSQL error containig native PGresult */
-class query_error : public std::runtime_error
+class DLL_PUBLIC query_error : public std::runtime_error
 {
 public:
     explicit query_error(std::shared_ptr<pg::result> res);
@@ -36,6 +61,9 @@ public:
 private:
     std::shared_ptr<pg::result> _res;
 };
+
+#undef DLL_PUBLIC
+#undef DLL_LOCAL
 
 /** Socket state enum. */
 enum socket_watch_mode {
