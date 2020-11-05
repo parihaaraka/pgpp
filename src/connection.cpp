@@ -17,14 +17,14 @@ std::function<void(connection*)> connection::_on_destruct_global_cb;
 
 std::function<void(
         const connection &cn,
-        const std::string &severity,
-        const std::string &message,
-        const std::string &hint
+        std::string_view severity,
+        std::string_view message,
+        std::string_view hint
         )> connection::_notice_cb_global = nullptr;
 
 std::function<void(
         const void *sender,
-        const std::string &error,
+        std::string_view error,
         const pg::result *res
         )> connection::_error_cb_global = nullptr;
 
@@ -73,9 +73,9 @@ connection::~connection()
 void connection::notice_receiver(void *arg, const PGresult *res)
 {
     connection *cn = static_cast<connection*>(arg);
-    string severity = pg::severity_eng(res);
-    string msg = pg::primary_message(res);
-    string hint = pg::hint(res);
+    auto severity = pg::severity_eng(res);
+    auto msg = pg::primary_message(res);
+    auto hint = pg::hint(res);
     if (_notice_cb_global)
         _notice_cb_global(*cn, severity, msg, hint);
     if (cn->_q && cn->_q->notice_cb)
@@ -840,9 +840,9 @@ bool connection::connect(unsigned int connect_timeout_sec)
     };
 
     vector<pair<string, string>> errors;
-    auto push_error = [this, &errors, &current_time](const char *err)
+    auto push_error = [this, &errors, &current_time](string_view err)
     {
-        if (!err)
+        if (err.empty())
             return;
         char *host = PQhost(_conn);
         char *port = PQport(_conn);
@@ -904,7 +904,13 @@ bool connection::connect(unsigned int connect_timeout_sec)
                 }
                 else // connection has been broken just before PQexec?!
                 {
-                    push_error(res ? pg::primary_message(res).c_str() : PQerrorMessage(_conn));
+                    if (res)
+                        push_error(pg::primary_message(res));
+                    else
+                    {
+                        auto err = PQerrorMessage(_conn);
+                        push_error(err ? string_view{err} : string_view{});
+                    }
                     PQclear(res);
                     disconnect();
                     _db_state_detected_cb(dbmode::na);
@@ -957,7 +963,7 @@ bool connection::connect(unsigned int connect_timeout_sec)
 
 bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeout_sec)
 {
-    auto raise_error = [this, throw_on_error](string&& error, const shared_ptr<pg::result> &res = shared_ptr<pg::result>())
+    auto raise_error = [this, throw_on_error](string_view error, const shared_ptr<pg::result> &res = shared_ptr<pg::result>())
     {
         _last_error = error;
         handle_error(res.get());
@@ -1035,7 +1041,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
             if (!was_in_transaction && tmp_res)
             {
                 _last_error = result->full_message();
-                std::string state = result->state();
+                std::string_view state = result->state();
                 // read_only_sql_transaction
                 if (state == "25006" && _db_state_detected_cb)
                 {

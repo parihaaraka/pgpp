@@ -10,19 +10,19 @@ namespace pg
 
 using namespace std;
 
-const char* err_field(const PGresult *res, int code)
+const char* err_field(const PGresult *res, int code) noexcept
 {
     const char *value = PQresultErrorField(res, code);
     return value ? value : "";
 }
 
-std::string severity_eng(const PGresult *res) { return err_field(res, PG_DIAG_SEVERITY_NONLOCALIZED); }
-std::string severity(const PGresult *res) { return err_field(res, PG_DIAG_SEVERITY); }
-std::string state(const PGresult *res) { return err_field(res, PG_DIAG_SQLSTATE); }
-std::string primary_message(const PGresult *res) { return err_field(res, PG_DIAG_MESSAGE_PRIMARY); }
-std::string detail(const PGresult *res) { return err_field(res, PG_DIAG_MESSAGE_DETAIL); }
-std::string hint(const PGresult *res) { return err_field(res, PG_DIAG_MESSAGE_HINT); }
-std::string full_message(const PGresult *res) { return PQresultErrorMessage(res); }
+std::string_view severity_eng(const PGresult *res) { return err_field(res, PG_DIAG_SEVERITY_NONLOCALIZED); }
+std::string_view severity(const PGresult *res) { return err_field(res, PG_DIAG_SEVERITY); }
+std::string_view state(const PGresult *res) { return err_field(res, PG_DIAG_SQLSTATE); }
+std::string_view primary_message(const PGresult *res) { return err_field(res, PG_DIAG_MESSAGE_PRIMARY); }
+std::string_view detail(const PGresult *res) { return err_field(res, PG_DIAG_MESSAGE_DETAIL); }
+std::string_view hint(const PGresult *res) { return err_field(res, PG_DIAG_MESSAGE_HINT); }
+std::string_view full_message(const PGresult *res) { return PQresultErrorMessage(res); }
 
 result::result(PGresult *res) noexcept
     : _res(res)
@@ -128,37 +128,37 @@ pg::result::operator bool() const
     return (status < PGRES_BAD_RESPONSE); // PGRES_EMPTY_QUERY, PGRES_COMMAND_OK, PGRES_TUPLES_OK, PGRES_COPY_OUT, PGRES_COPY_IN
 }
 
-std::string result::severity_eng()
+string_view result::severity_eng() const
 {
     return pg::severity_eng(_res);
 }
 
-std::string result::severity()
+std::string_view result::severity() const
 {
     return pg::severity(_res);
 }
 
-std::string result::state()
+std::string_view result::state() const
 {
     return pg::state(_res);
 }
 
-std::string result::primary_message()
+std::string_view result::primary_message() const
 {
     return pg::primary_message(_res);
 }
 
-std::string result::detail()
+std::string_view result::detail() const
 {
     return pg::detail(_res);
 }
 
-std::string result::hint()
+std::string_view result::hint() const
 {
     return pg::hint(_res);
 }
 
-std::string result::full_message()
+std::string_view result::full_message() const
 {
     return pg::full_message(_res);
 }

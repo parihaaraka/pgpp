@@ -36,7 +36,7 @@ class dbpool
 private:
     static std::function<void(
             const void *sender,
-            const std::string &error,
+            std::string_view error,
             const void *user_ptr)> _error_cb;
 
 public:
@@ -65,8 +65,10 @@ public:
         return res.str();
     }
 
-    /** Create new or retrieve existing connection. */
-    std::shared_ptr<T> get_connection(bool is_writable = true, bool throw_on_error = true)
+    /** Create new or retrieve existing connection. on_release must never throw. */
+    std::shared_ptr<T> get_connection(bool is_writable = true,
+                                      bool throw_on_error = true,
+                                      std::function<void(T*)> on_release = nullptr)
     {
         std::lock_guard<std::mutex> pooler_lock(_m);
 
@@ -145,8 +147,10 @@ public:
 
         // return another smart pointer with it's own control block with custom deleter
         // (pool captured inside lambda to keep it alive)
-        return std::shared_ptr<T>(db, [pool](T *cn_raw)
+        return std::shared_ptr<T>(db, [pool, on_release](T *cn_raw)
         {
+            if (on_release)
+                on_release(cn_raw);
             std::lock_guard<std::mutex> pooler_lock(pool->_m);
             std::unique_ptr<dbconnection> &cn = pool->_connections_in_use.at(cn_raw);
             //auto node = cn->node;
@@ -384,7 +388,7 @@ private:
 template <typename T>
 std::function<void(
         const void *sender,
-        const std::string &error,
+        std::string_view error,
         const void *user_ptr)> dbpool<T>::_error_cb;
 
 template <typename T>

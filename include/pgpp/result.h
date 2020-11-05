@@ -12,13 +12,13 @@
 namespace pg
 {
 
-std::string severity_eng(const PGresult *res);
-std::string severity(const PGresult *res);
-std::string state(const PGresult *res);
-std::string primary_message(const PGresult *res);
-std::string detail(const PGresult *res);
-std::string hint(const PGresult *res);
-std::string full_message(const PGresult *res);
+std::string_view severity_eng(const PGresult *res);
+std::string_view severity(const PGresult *res);
+std::string_view state(const PGresult *res);
+std::string_view primary_message(const PGresult *res);
+std::string_view detail(const PGresult *res);
+std::string_view hint(const PGresult *res);
+std::string_view full_message(const PGresult *res);
 
 class result
 {
@@ -51,13 +51,13 @@ public:
     bool copy_in_ready() const;
     bool copy_out_ready() const;
 
-    std::string severity_eng();
-    std::string severity();
-    std::string state();
-    std::string primary_message();
-    std::string detail();
-    std::string hint();
-    std::string full_message();
+    std::string_view severity_eng() const;
+    std::string_view severity() const;
+    std::string_view state() const;
+    std::string_view primary_message() const;
+    std::string_view detail() const;
+    std::string_view hint() const;
+    std::string_view full_message() const;
 
     // contains rows already fetched before error occured (async query only)
     std::shared_ptr<result> partial_result;

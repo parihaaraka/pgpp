@@ -194,21 +194,21 @@ private:
 
     static std::function<void(
             const connection &cn,
-            const std::string &severity,
-            const std::string &message,
-            const std::string &hint
+            std::string_view severity,
+            std::string_view message,
+            std::string_view hint
             )> _notice_cb_global;
 
     /** preferred error handler */
     std::function<void(
             const void *sender,
-            const std::string &error,
+            std::string_view error,
             const pg::result *res
             )> _error_cb;
 
     static std::function<void(
             const void *sender,
-            const std::string &error,
+            std::string_view error,
             const pg::result *res
             )> _error_cb_global;
 

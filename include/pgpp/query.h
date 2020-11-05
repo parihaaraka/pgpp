@@ -47,7 +47,7 @@ public:
      */
     std::function<void(const connection &cn, result &res)> row_fetched_async_cb;
 
-    std::function<void(const connection &cn, const std::string &severity, const std::string &message, const std::string &hint)> notice_cb;
+    std::function<void(const connection &cn, std::string_view severity, std::string_view message, std::string_view hint)> notice_cb;
 
     /*!
      * \brief Callback to ask a caller for COPY IN data.
