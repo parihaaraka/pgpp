@@ -120,7 +120,12 @@ void connection::fetch()
         if (!PQconsumeInput(_conn))
         {
             raise_error(PQerrorMessage(_conn));
-            break;  // incorrect processing?
+            // Timeout on incorrect connection close (something else?)
+            // Too late to call on_before_disconnect().
+            _temp_result = nullptr;
+            PQfinish(_conn);
+            _conn = nullptr;
+            break;
         }
 
         fetch_notifications();
@@ -696,6 +701,7 @@ void connection::exec_async(std::shared_ptr<query> q) noexcept
     // do not change current query state
     auto safe_raise = [this, &q](const string& error)
     {
+        _last_error = error;
         handle_error();
         if (q && q->query_finished_async_cb)
         {

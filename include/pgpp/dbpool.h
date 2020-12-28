@@ -48,6 +48,7 @@ public:
     {
         std::stringstream res;
         std::lock_guard<std::mutex> pooler_lock(_m);
+        std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
         for (auto& npair :_nodes)
         {
             std::shared_ptr<dbnode> &n = npair.second;
@@ -55,12 +56,13 @@ public:
                 << ":  " << n->available
                 << " of " << n->total
                 << " available, "
-                << (n->mode == dbmode::na ? "NA" : (n->mode == dbmode::ro ? "RO" : "RW"))
-                << ", "
-                << std::chrono::duration_cast<std::chrono::milliseconds>(
-                       n->next_try - std::chrono::system_clock::now()
-                       ).count()
-                << " ms untill next_try" << std::endl;
+                << (n->mode == dbmode::na ? "NA" : (n->mode == dbmode::ro ? "RO" : "RW"));
+            if (n->next_try >= now)
+            {
+                res << ", "
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(n->next_try - now).count()
+                    << " msec untill next_try" << std::endl;
+            }
         }
         return res.str();
     }
@@ -375,7 +377,7 @@ private:
             if (n->mode != dbmode::ro || wanted_mode == dbmode::ro)
             {
                 if (    !new_node ||
-                        // single master politics
+                        // single master policies
                         (wanted_mode == dbmode::rw && n->mode == dbmode::rw) ||
                         new_node->total > n->total)
                     new_node = n;

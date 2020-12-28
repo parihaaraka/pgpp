@@ -268,11 +268,14 @@ public:
     /** External socket watcher must call this function on ready write state detected. */
     void ready_write_socket();
 
-    /** External timer must call this function when elapsed. */
+    /*  not implemented yet - prefer `tcp_user_timeout` connection string option
+
+    /// External timer must call this function when elapsed.
     void timer_elapsed();
 
-    /** Callback for asking external timer to countdown the requested msecs. */
+    /// Callback for asking external timer to countdown the requested msecs.
     void on_timer_request(decltype(_timer_request_cb) handler) { _timer_request_cb = handler; }
+    */
 
     // async libpq api usage example:
     // https://github.com/markokr/libpq-rowproc-demos/blob/master/demo-onerow-async.c
