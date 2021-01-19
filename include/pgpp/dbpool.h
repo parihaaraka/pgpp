@@ -39,6 +39,8 @@ private:
             std::string_view error,
             const void *user_ptr)> _error_cb;
 
+    std::chrono::time_point<std::chrono::system_clock> _invalidate_ro_time;
+
 public:
     dbpool(const dbpool&) = delete;
     dbpool& operator=(const dbpool&) = delete;
@@ -286,7 +288,7 @@ private:
     std::unordered_map<size_t, std::shared_ptr<dbnode>> _nodes;
 
     // callback to adjust caller connection string (clears connection string when suitable node not found)
-    // * pool is captured by smart pointer deleter, so this function will alway stay valid within connection
+    // * pool is captured by smart pointer deleter, so this function will always stay valid within connection
     void db_state_detected(T *cn, std::string &cs, dbmode detected_mode, dbmode wanted_mode)
     {
         std::lock_guard<std::mutex> pooler_lock(_m);
@@ -374,6 +376,8 @@ private:
             if (n->next_try >= now && n->mode == dbmode::na)
                 continue;
 
+            // RW and NA are ok if RW requested
+            // RW, RO and NA are ok if RO requested
             if (n->mode != dbmode::ro || wanted_mode == dbmode::ro)
             {
                 if (    !new_node ||
@@ -383,6 +387,26 @@ private:
                     new_node = n;
             }
         }
+
+        // no RW node
+        if (!new_node && wanted_mode == dbmode::rw && !_nodes.empty())
+        {
+            auto now = std::chrono::system_clock::now();
+            if (_invalidate_ro_time < now)
+            {
+                // reset RO to NA to detect nodes' mode again
+                for (auto& npair :_nodes)
+                {
+                    if (npair.second->mode == dbmode::ro)
+                        npair.second->mode = dbmode::na;
+                }
+                // do not allow to reset the modes again during 1 second
+                _invalidate_ro_time = now + std::chrono::seconds(1);
+                // return NA node
+                return find_node(wanted_mode);
+            }
+        }
+
         return new_node;
     }
 };

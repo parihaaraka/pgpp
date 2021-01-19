@@ -268,7 +268,8 @@ public:
     /** External socket watcher must call this function on ready write state detected. */
     void ready_write_socket();
 
-    /*  not implemented yet - prefer `tcp_user_timeout` connection string option
+    /*  not implemented yet - prefer `tcp_user_timeout` and `keepalives*` connection string options
+        https://www.postgresql.org/docs/12/libpq-connect.html#LIBPQ-KEEPALIVES
 
     /// External timer must call this function when elapsed.
     void timer_elapsed();
