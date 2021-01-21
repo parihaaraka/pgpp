@@ -119,12 +119,20 @@ void connection::fetch()
         _last_action_moment = chrono::system_clock::now();
         if (!PQconsumeInput(_conn))
         {
-            raise_error(PQerrorMessage(_conn));
-            // Timeout on incorrect connection close (something else?)
-            // Too late to call on_before_disconnect().
+            // dead connection detected (too late to call on_before_disconnect())
+
+            _socket_watcher_request_cb(socket_watch_mode::none);
+
+            // save error message and finalize connection to make closed state available within error handler
+            const char *msg = PQerrorMessage(_conn);
+            string err(msg ? msg : "");
             _temp_result = nullptr;
             PQfinish(_conn);
             _conn = nullptr;
+            raise_error(err);
+
+            // we can't reconnect here because a user may try to use the connection
+            // while it is in process
             break;
         }
 
