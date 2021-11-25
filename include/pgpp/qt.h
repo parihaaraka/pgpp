@@ -7,9 +7,6 @@
 namespace pg
 {
 
-void changePassword();
-bool changeSettings();
-bool prepareDB(bool override = false);
 QVariant::Type typeToVariantType(unsigned int sqlType);
 QVariant raw2Variant(const char *val, QVariant::Type type);
 params& operator<<(params& obj, const QString &param);

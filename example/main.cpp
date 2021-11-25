@@ -89,7 +89,7 @@ void reinit_db_cb(struct ev_loop *loop, ev_async *, int)
                 BOLDGREEN << channel << " (" << payload << ")" << RESET << endl;
     });
 
-    _cn->on_notice_global([](const pg::connection &, const std::string &severity, const std::string &message, const std::string &hint)
+    _cn->on_notice_global([](const pg::connection &, std::string_view severity, std::string_view message, std::string_view hint)
     {
         cout << currentTime() << "! notice received: " << BOLDGREEN << severity << ": " << message;
         if (!hint.empty())
@@ -102,7 +102,7 @@ void reinit_db_cb(struct ev_loop *loop, ev_async *, int)
         cout << currentTime() << "on_before_disconnect" << endl;
     });
 
-    _cn->on_error([](const void *, const std::string &error, const pg::result *res)
+    _cn->on_error([](const void *, std::string_view error, const pg::result *res)
     {
         cout << currentTime() << RED << error << MAGENTA;
         if (res && res->partial_result)

@@ -1,5 +1,5 @@
 all:
-	g++ -std=c++11 -I/usr/include/postgresql -I../include -fPIC \
+	g++ -std=c++17 -I/usr/include/postgresql -I.. -I../include -fPIC \
 	main.cpp \
 	../src/params.cpp \
 	../src/result.cpp \
