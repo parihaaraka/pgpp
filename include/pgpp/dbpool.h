@@ -204,12 +204,15 @@ public:
     }
 
     /** Create or retrieve existing shared pointer to a named connection pool. */
-    static std::shared_ptr<dbpool> get(const std::string &name = "default")
+	static std::shared_ptr<dbpool> get(const std::string &name = "default", bool dont_create = false)
     {
         std::lock_guard<std::mutex> lk(dbpool::_sm);
         auto pool_it = _pools.find(name);
         if (pool_it != _pools.end())
             return pool_it->second;
+
+		if (dont_create)
+			return std::shared_ptr<dbpool>();
 
         // make_shared unable to use private constructor
         auto pool = std::shared_ptr<dbpool>(new dbpool);
