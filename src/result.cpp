@@ -59,7 +59,8 @@ const char* result::raw_value(int row, int col) const noexcept
 
 const char* result::raw_value(int row, const char* col_name) const noexcept
 {
-    return PQgetvalue(_res, row, PQfnumber(_res, col_name));
+    int cnum = PQfnumber(_res, col_name);
+    return cnum < 0 ? nullptr : PQgetvalue(_res, row, cnum);
 }
 
 std::vector<unsigned char> result::bytea_value(int row, int col)
@@ -74,7 +75,8 @@ int result::value_size(int row, int col) const noexcept
 
 int result::value_size(int row, const char* col_name) const noexcept
 {
-    return PQgetlength(_res, row, PQfnumber(_res, col_name));
+    int cnum = PQfnumber(_res, col_name);
+    return cnum < 0 ? 0 : PQgetlength(_res, row, cnum);
 }
 
 bool result::is_null(int row, int col) const noexcept
@@ -84,7 +86,8 @@ bool result::is_null(int row, int col) const noexcept
 
 bool result::is_null(int row, const char* col_name) const noexcept
 {
-    return PQgetisnull(_res, row, PQfnumber(_res, col_name));
+    int cnum = PQfnumber(_res, col_name);
+    return cnum < 0 ? true : PQgetisnull(_res, row, cnum);
 }
 
 int result::column_index(const char* col_name) const noexcept
