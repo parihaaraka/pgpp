@@ -16,7 +16,7 @@ std::function<void(connection*)> connection::_on_construct_global_cb;
 std::function<void(connection*)> connection::_on_destruct_global_cb;
 
 std::function<void(
-        const connection &cn,
+        const connection *cn,
         std::string_view severity,
         std::string_view message,
         std::string_view hint
@@ -27,6 +27,11 @@ std::function<void(
         std::string_view error,
         const pg::result *res
         )> connection::_error_cb_global = nullptr;
+
+// libpq generates notices on its own, so notice callback may be called
+// when a result's parent connection does not exist
+static std::unordered_set<connection*> existence_witness;
+static std::mutex witness_guard;
 
 query_error::query_error(std::shared_ptr<pg::result> res)
     : std::runtime_error(PQresultErrorMessage(res->result_ptr())), _res(res)
@@ -43,6 +48,8 @@ connection::connection(const string &connection_string)
 {
     if (_on_construct_global_cb)
         _on_construct_global_cb(this);
+    auto lk = std::lock_guard(witness_guard);
+    existence_witness.insert(this);
 }
 
 connection::connection(const string &connection_string, function<void(connection*, string&, dbmode)> db_state_detected_cb)
@@ -68,6 +75,8 @@ connection::~connection()
         handle_error();
     }
     catch (...) {}
+    auto lk = std::lock_guard(witness_guard);
+    existence_witness.erase(this);
 }
 
 void connection::notice_receiver(void *arg, const PGresult *res)
@@ -76,10 +85,18 @@ void connection::notice_receiver(void *arg, const PGresult *res)
     auto severity = pg::severity_eng(res);
     auto msg = pg::primary_message(res);
     auto hint = pg::hint(res);
+
+    // notice handler may be called from another thread, so we shouldn't allow
+    // to alter the connections set during its execution
+
+    auto lk = std::lock_guard(witness_guard);
+    if (existence_witness.find(cn) == existence_witness.end())
+        cn = nullptr;
+
     if (_notice_cb_global)
-        _notice_cb_global(*cn, severity, msg, hint);
-    if (cn->_q && cn->_q->notice_cb)
-        cn->_q->notice_cb(*cn, severity, msg, hint);
+        _notice_cb_global(cn, severity, msg, hint);
+    if (cn && cn->_q && cn->_q->notice_cb)
+        cn->_q->notice_cb(cn, severity, msg, hint);
 }
 
 void connection::fetch_notifications()
@@ -237,7 +254,7 @@ void connection::fetch()
             // partial_result contains partial result already fetched
             auto _new_temp_result = make_shared<pg::result>(tmp_res);
             _new_temp_result->partial_result = _temp_result;
-            _temp_result = move(_new_temp_result);
+            _temp_result = std::move(_new_temp_result);
         }
 
         // resultset completely fetched
@@ -391,7 +408,7 @@ void connection::raise_error(const std::shared_ptr<pg::result> &res) noexcept
 
     // clear query object to avoid execution on reconnect
     // and to allow sequental execution via query_finished_async_cb
-    auto q_tmp = move(_q);
+    auto q_tmp = std::move(_q);
     if (q_tmp && q_tmp->query_finished_async_cb)
     {
         try
@@ -481,7 +498,7 @@ void connection::async_connection_proceed()
 void connection::async_validate_rw_mode()
 {
     if (_q)
-        _suspended_query = move(_q);
+        _suspended_query = std::move(_q);
     _q = make_shared<query>();
     *_q = "select pg_is_in_recovery()::int::text";
     _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query> q, const std::string &error)
@@ -501,7 +518,7 @@ void connection::async_validate_rw_mode()
         }
 
         // restore suspended (initial) query
-        cn._q = move(cn._suspended_query);
+        cn._q = std::move(cn._suspended_query);
         if (prev_cs == cn._current_cs) // ok
         {
             cn.on_async_connected();
@@ -521,7 +538,7 @@ void connection::async_validate_rw_mode()
 void connection::async_restore_listen_channels()
 {
     if (_q)
-        _suspended_query = move(_q);
+        _suspended_query = std::move(_q);
     _q = make_shared<query>();
     for (string &ch : _channels)
         _q->query_string += "LISTEN " + ch + ';';
@@ -543,7 +560,7 @@ void connection::async_restore_listen_channels()
         }
 
         // restore suspended (initial) query
-        cn._q = move(cn._suspended_query);
+        cn._q = std::move(cn._suspended_query);
         if (cn._q) // run initial query
             cn.exec_async(cn._q); // entire cycle will start (reconnect and so on) in case of error
         else
@@ -628,12 +645,12 @@ void connection::on_destruct_global(const std::function<void(connection*)> &hand
 
 void connection::on_destruct(fu2::unique_function<void()> &&handler)
 {
-    _on_destruct_cb = move(handler);
+    _on_destruct_cb = std::move(handler);
 }
 
 void connection::on_socket_watcher_request(fu2::unique_function<void(int) noexcept> &&handler)
 {
-    _socket_watcher_request_cb = move(handler);
+    _socket_watcher_request_cb = std::move(handler);
 }
 
 void connection::connect_async() noexcept

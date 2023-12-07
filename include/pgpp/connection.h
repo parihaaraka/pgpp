@@ -197,7 +197,7 @@ private:
     std::function<void(const connection &cn)> _before_disconnect_cb;
 
     static std::function<void(
-            const connection &cn,
+            const connection *cn,
             std::string_view severity,
             std::string_view message,
             std::string_view hint

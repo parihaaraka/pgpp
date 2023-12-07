@@ -47,7 +47,10 @@ public:
      */
     std::function<void(const connection &cn, result &res)> row_fetched_async_cb;
 
-    std::function<void(const connection &cn, std::string_view severity, std::string_view message, std::string_view hint)> notice_cb;
+    /**
+     * @brief NOTICE callback. lipbq generates notices on its own so connection pointer may be nullptr if it is destructed already.
+     */
+    std::function<void(const connection *cn, std::string_view severity, std::string_view message, std::string_view hint)> notice_cb;
 
     /*!
      * \brief Callback to ask a caller for COPY IN data.
