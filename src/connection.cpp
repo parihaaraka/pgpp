@@ -365,6 +365,20 @@ string connection::escape_bytea(const unsigned char *value, size_t size)
     return res;
 }
 
+string connection::escape_identifier(std::string_view ident)
+{
+    if (!_conn || ident.empty())
+        return string();
+    char *escaped_identifier = reinterpret_cast<char*>(PQescapeIdentifier(_conn, ident.data(), ident.size()));
+    string res;
+    if (escaped_identifier)
+    {
+        res = escaped_identifier;
+        PQfreemem(escaped_identifier);
+    }
+    return res;
+}
+
 string escape_bytea(const unsigned char *value, size_t size)
 {
     size_t len;

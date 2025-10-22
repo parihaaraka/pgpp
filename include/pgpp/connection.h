@@ -115,6 +115,7 @@ public:
     void set_connection_string(const std::string &cs) { _current_cs = cs; } // TODO: reconnect or something else
     const std::string& last_error() const { return _last_error; }
     std::string escape_bytea(const unsigned char *value, size_t size);
+    std::string escape_identifier(std::string_view ident);
 
     /*!
      * @brief Establishes connection to postgresql server.
