@@ -80,6 +80,9 @@ enum socket_watch_mode {
 // deprecated!
 // "It might give the wrong results if used in programs that use multiple database connections."
 std::string escape_bytea(const unsigned char *value, size_t size);
+// connection independent (for 1 byte charsets only)
+std::string escape_identifier_1b(std::string_view ident);
+
 std::vector<unsigned char> unescape_bytea(const char *value);
 std::string encrypt_password(const std::string &password, const std::string &user = "");
 
@@ -115,7 +118,7 @@ public:
     void set_connection_string(const std::string &cs) { _current_cs = cs; } // TODO: reconnect or something else
     const std::string& last_error() const { return _last_error; }
     std::string escape_bytea(const unsigned char *value, size_t size);
-    std::string escape_identifier(std::string_view ident);
+    std::string escape_identifier(std::string_view ident) const;
 
     /*!
      * @brief Establishes connection to postgresql server.

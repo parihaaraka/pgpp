@@ -365,7 +365,8 @@ string connection::escape_bytea(const unsigned char *value, size_t size)
     return res;
 }
 
-string connection::escape_identifier(std::string_view ident)
+// pay attention the connection must be alive
+string connection::escape_identifier(std::string_view ident) const
 {
     if (!_conn || ident.empty())
         return string();
@@ -377,6 +378,25 @@ string connection::escape_identifier(std::string_view ident)
         PQfreemem(escaped_identifier);
     }
     return res;
+}
+
+string escape_identifier_1b(std::string_view ident)
+{
+    if (ident.size() > 512)
+        throw std::invalid_argument("don't do it");
+    char *pos = (char*)alloca(ident.size() * 2 + 2);
+    char *begin = pos;
+    *pos++ = '"';
+    for (auto c: ident)
+    {
+        *pos++ = c;
+        if (c == '"')
+            *pos++ = c;
+        else if ((unsigned char)(c) & 0x80)
+            throw std::runtime_error("unsupported character, use `pg::connection::escape_identifier()` instead");
+    }
+    *pos++ = '"';
+    return {begin, static_cast<size_t>(pos - begin)};
 }
 
 string escape_bytea(const unsigned char *value, size_t size)
