@@ -3,13 +3,14 @@
 
 #include "pgpp/params.h"
 #include <string.h>
+#include <string>
 
 namespace pg
 {
 
 params &params::add(std::string &&param)
 {
-    _temps.push_back(param);
+    _temps.emplace_back(param);
     return addref(_temps.back().data(), static_cast<int>(_temps.back().size()));
 }
 
@@ -27,26 +28,6 @@ params &params::add(const char *param, int size)
         return add(std::string(param));
 
     return add(std::string(param, static_cast<size_t>(size)));
-}
-
-params &params::operator<<(std::string &&param)
-{
-    return add(param);
-}
-
-params &params::operator<<(const std::string &param)
-{
-    return add(param);
-}
-
-params &params::operator<<(const char *param)
-{
-    return add(param);
-}
-
-params &params::addref(std::string &&param)
-{
-    return add(param);
 }
 
 params &params::addref(const std::string &param)
