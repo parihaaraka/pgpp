@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PG_CONNECTION_H
@@ -11,13 +11,11 @@
 #else
 #	include <libpq-fe.h>
 #endif
-#include <atomic>
 #include <string>
 #include <functional>
 #include <memory>
-#include <deque>
+#include <utility>
 #include <vector>
-#include <mutex>
 #include <chrono>
 #include "dbpool.h"
 #include "pgpp/result.h"
@@ -60,8 +58,8 @@ class query;
 class DLL_PUBLIC query_error : public std::runtime_error
 {
 public:
-    explicit query_error(std::shared_ptr<pg::result> res);
-    virtual std::shared_ptr<pg::result> result() const;
+    explicit query_error(std::shared_ptr<pg::result> &res);
+    [[nodiscard]] virtual std::shared_ptr<pg::result> result() const;
 private:
     std::shared_ptr<pg::result> _res;
 };
@@ -91,13 +89,14 @@ std::string encrypt_password(const std::string &password, const std::string &use
 //  timeouts
 
 /** PostgreSQL connection */
-class connection
+class connection //NOLINT(cppcoreguidelines-special-member-functions)
 {
     //friend std::shared_ptr<connection> dbpool<connection>::get_connection(bool, bool);
     friend class dbpool<connection>;
     //WA for Clang compilation error. See https://bugs.llvm.org/show_bug.cgi?id=30859
 public:
-    connection(const std::string &connection_string = std::string());
+    connection(std::string_view connection_string = {}); //NOLINT(google-explicit-constructor,bugprone-forwarding-reference-overload)
+
     ~connection();
 
     /** Executes 'select 1' query to verify connectivity. */
@@ -112,13 +111,13 @@ public:
     void listen(const std::vector<std::string> &channels);
     void disconnect(bool call_disconnect_handler = true) noexcept;
     bool cancel() noexcept;
-    bool is_connected() const noexcept { return _conn && PQstatus(_conn) == CONNECTION_OK; }
-    bool is_idle() const noexcept;
+    [[nodiscard]] bool is_connected() const noexcept { return _conn && PQstatus(_conn) == CONNECTION_OK; }
+    [[nodiscard]] bool is_idle() const noexcept;
     std::chrono::seconds idle_duration();
     void set_connection_string(const std::string &cs) { _current_cs = cs; } // TODO: reconnect or something else
-    const std::string& last_error() const { return _last_error; }
+    [[nodiscard]] const std::string& last_error() const { return _last_error; }
     std::string escape_bytea(const unsigned char *value, size_t size);
-    std::string escape_identifier(std::string_view ident) const;
+    [[nodiscard]] std::string escape_identifier(std::string_view ident) const;
 
     /*!
      * @brief Establishes connection to postgresql server.
@@ -158,16 +157,21 @@ public:
      * @param fetch_cb callback to process fetched data row by row. Return false to emit cancel() and prevent next calls.
      * @return result containing the final status of COPY operation
      */
-    std::unique_ptr<pg::result> on_get_copy_data(std::function<bool(const char *buffer, int nbytes)> fetch_cb) noexcept;
+    std::unique_ptr<pg::result> on_get_copy_data(std::function<bool(const char *buffer, int nbytes)> &fetch_cb) noexcept;
 
     // TODO implement async COPY
 
     // ASYNC API
-    int socket() const noexcept;
+    [[nodiscard]] int socket() const noexcept;
     void connect_async() noexcept;
     void exec_async(std::shared_ptr<pg::query> q) noexcept;
 
 private:
+    // libpq generates notices on its own, so notice callback may be called
+    // when a result's parent connection does not exist
+    static std::unordered_set<connection*> existence_witness;
+    static std::mutex witness_guard;
+
     enum class async_stage {
         none,
         connecting,
@@ -178,8 +182,8 @@ private:
     };
     std::string _copy_end_error;
 
-    connection(const std::string &connection_string,
-               std::function<void(connection*, std::string&, dbmode)> db_state_detected_cb);
+    connection(std::string_view connection_string,
+               std::function<void(connection *, std::string &, dbmode)> db_state_detected_cb);
 
     PGconn *_conn = nullptr;
     async_stage _async_stage = async_stage::none;
@@ -241,19 +245,19 @@ private:
     std::shared_ptr<pg::query> _suspended_query;
 
     std::string _context;
-    time_t _connection_start_moment, _last_try;  // TODO:  use these vars to enable timeouts
+    time_t _connection_start_moment{}, _last_try{};  // TODO:  use these vars to enable timeouts
 
     std::string _copy_in_buf;
     bool _copy_in_done = false;
     bool send_copy_data();
 
 public:
-    void on_connected(decltype(_connected_cb) handler) { _connected_cb = handler; }
-    void on_before_disconnect(decltype(_before_disconnect_cb) handler) { _before_disconnect_cb = handler; }
-    static void on_notice_global(decltype(_notice_cb_global) handler) { _notice_cb_global = handler; }
-    void on_notify(decltype(_notify_cb) handler) { _notify_cb = handler; }
-    void on_error(decltype(_error_cb) handler) { _error_cb = handler; }
-    static void on_error_global(decltype(_error_cb_global) handler) { _error_cb_global = handler; }
+    void on_connected(decltype(_connected_cb) handler) { _connected_cb = std::move(handler); }
+    void on_before_disconnect(decltype(_before_disconnect_cb) handler) { _before_disconnect_cb = std::move(handler); }
+    static void on_notice_global(decltype(_notice_cb_global) handler) { _notice_cb_global = std::move(handler); }
+    void on_notify(decltype(_notify_cb) handler) { _notify_cb = std::move(handler); }
+    void on_error(decltype(_error_cb) handler) { _error_cb = std::move(handler); }
+    static void on_error_global(decltype(_error_cb_global) handler) { _error_cb_global = std::move(handler); }
 
     /** Callback to be called on connection instantiation. */
     static void on_construct_global(const std::function<void(connection*)> &handler);

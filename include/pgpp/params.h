@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PARAMS_H
@@ -10,7 +10,6 @@
 #include <string_view>
 #include <optional>
 #include <type_traits>
-#include <vector>
 #include <utility>
 
 namespace pg
@@ -55,9 +54,9 @@ public:
     template <std::size_t N>
     params& addref(const char(&param)[N]) { return addref(param, static_cast<int>(N ? N - 1 : 0)); }
 
-    const char* const* values() const { return _param_pointers.data(); }
-    const int* lengths() const { return _param_lengths.data(); }
-    size_t count() const { return _param_lengths.size(); }
+    [[nodiscard]] const char* const* values() const { return _param_pointers.data(); }
+    [[nodiscard]] const int* lengths() const { return _param_lengths.data(); }
+    [[nodiscard]] size_t count() const { return _param_lengths.size(); }
     params& clear();
 
 private:

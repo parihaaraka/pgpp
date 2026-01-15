@@ -1,16 +1,21 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #include "pgpp/connection.h"
 #include "pgpp/query.h"
 #include "pgpp/result.h"
+#include <exception>
+#include <memory>
 #include <thread>
 #include <cstring>
+
+//NOLINTBEGIN(bugprone-empty-catch)
 
 namespace pg
 {
 
-using namespace std;
+std::unordered_set<connection*> connection::existence_witness{};
+std::mutex connection::witness_guard{};
 
 std::function<void(connection*)> connection::_on_construct_global_cb;
 std::function<void(connection*)> connection::_on_destruct_global_cb;
@@ -28,23 +33,17 @@ std::function<void(
         const pg::result *res
         )> connection::_error_cb_global = nullptr;
 
-// libpq generates notices on its own, so notice callback may be called
-// when a result's parent connection does not exist
-static std::unordered_set<connection*> existence_witness;
-static std::mutex witness_guard;
-
-query_error::query_error(std::shared_ptr<pg::result> res)
+query_error::query_error(std::shared_ptr<pg::result> &res)
     : std::runtime_error(PQresultErrorMessage(res->result_ptr())), _res(res)
 {
 }
 
-shared_ptr<pg::result> query_error::result() const
+std::shared_ptr<pg::result> query_error::result() const
 {
     return _res;
 }
 
-connection::connection(const string &connection_string)
-    : _current_cs(connection_string)
+connection::connection(std::string_view connection_string) : _current_cs(connection_string)
 {
     if (_on_construct_global_cb)
         _on_construct_global_cb(this);
@@ -52,11 +51,13 @@ connection::connection(const string &connection_string)
     existence_witness.insert(this);
 }
 
-connection::connection(const string &connection_string, function<void(connection*, string&, dbmode)> db_state_detected_cb)
+connection::connection(std::string_view connection_string,
+                       std::function<void(connection *, std::string &, dbmode)> db_state_detected_cb)
     : connection(connection_string)
 {
     if (db_state_detected_cb)
-        _db_state_detected_cb = std::bind(db_state_detected_cb, this, ref(_current_cs), placeholders::_1);
+        _db_state_detected_cb = [cb = std::move(db_state_detected_cb), this](auto &&mode)
+        { cb(this, _current_cs, std::forward<decltype(mode)>(mode)); };
 }
 
 connection::~connection()
@@ -69,7 +70,7 @@ connection::~connection()
         else if (_on_destruct_global_cb)
             _on_destruct_global_cb(this);
     }
-    catch (const exception &e)
+    catch (const std::exception &e)
     {
         _last_error = e.what();
         handle_error();
@@ -81,7 +82,7 @@ connection::~connection()
 
 void connection::notice_receiver(void *arg, const PGresult *res)
 {
-    connection *cn = static_cast<connection*>(arg);
+    auto *cn = static_cast<connection*>(arg);
     auto severity = pg::severity_eng(res);
     auto msg = pg::primary_message(res);
     auto hint = pg::hint(res);
@@ -101,12 +102,12 @@ void connection::notice_receiver(void *arg, const PGresult *res)
 
 void connection::fetch_notifications()
 {
-    PGnotify *notify;
+    PGnotify *notify{};
     while ((notify = PQnotifies(_conn)) != nullptr)
     {
-        unique_ptr<PGnotify, void(*)(void*)> n_guard(notify, PQfreemem);
+        std::unique_ptr<PGnotify, void(*)(void*)> n_guard(notify, PQfreemem);
         if (_notify_cb)
-            _notify_cb(n_guard->be_pid, string(n_guard->relname), string(n_guard->extra));
+            _notify_cb(n_guard->be_pid, std::string(n_guard->relname), std::string(n_guard->extra));
     }
 }
 
@@ -133,7 +134,7 @@ void connection::fetch()
     bool is_notification = is_idle();
     do
     {
-        _last_action_moment = chrono::system_clock::now();
+        _last_action_moment = std::chrono::system_clock::now();
         if (!PQconsumeInput(_conn))
         {
             // dead connection detected (too late to call on_before_disconnect())
@@ -142,7 +143,7 @@ void connection::fetch()
 
             // save error message and finalize connection to make closed state available within error handler
             const char *msg = PQerrorMessage(_conn);
-            string err(msg ? msg : "");
+            std::string err(msg ? msg : "");
             _temp_result = nullptr;
             PQfinish(_conn);
             _conn = nullptr;
@@ -202,7 +203,7 @@ void connection::fetch()
         if (status == PGRES_COPY_IN)
         {
             _last_error.clear();
-            _temp_result = make_shared<pg::result>(tmp_res);
+            _temp_result = std::make_shared<pg::result>(tmp_res);
             if (send_copy_data())
                 return;
             continue;  // error (need to fetch empty resultset)
@@ -213,13 +214,13 @@ void connection::fetch()
         if (!_temp_result)
         {
             // initialize new resultset
-            _temp_result = make_shared<pg::result>(tmp_res);
+            _temp_result = std::make_shared<pg::result>(tmp_res);
 
             if (status != PGRES_FATAL_ERROR && _q->resultset_started_async_cb)
             {
                 try
                 {
-                    _q->resultset_started_async_cb(*this, *_temp_result.get());
+                    _q->resultset_started_async_cb(*this, *_temp_result);
                 } catch (...) {}
             }
         }
@@ -252,7 +253,7 @@ void connection::fetch()
         {
             // main result is the empty one with error,
             // partial_result contains partial result already fetched
-            auto _new_temp_result = make_shared<pg::result>(tmp_res);
+            auto _new_temp_result = std::make_shared<pg::result>(tmp_res);
             _new_temp_result->partial_result = _temp_result;
             _temp_result = std::move(_new_temp_result);
         }
@@ -274,7 +275,7 @@ void connection::fetch()
             {
                 try
                 {
-                    _q->resultset_fetched_async_cb(*this, *_q->results.back().get());
+                    _q->resultset_fetched_async_cb(*this, *_q->results.back());
                 } catch (...) {}
             }
             continue;
@@ -284,7 +285,7 @@ void connection::fetch()
         {
             try
             {
-                _q->row_fetched_async_cb(*this, *_temp_result.get());
+                _q->row_fetched_async_cb(*this, *_temp_result);
             } catch (...) {}
         }
     }
@@ -349,29 +350,29 @@ bool connection::is_idle() const noexcept
     return !_conn || status == PQTRANS_IDLE || status == PQTRANS_UNKNOWN;
 }
 
-chrono::seconds connection::idle_duration()
+std::chrono::seconds connection::idle_duration()
 {
     return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - _last_action_moment);
 }
 
-string connection::escape_bytea(const unsigned char *value, size_t size)
+std::string connection::escape_bytea(const unsigned char *value, size_t size)
 {
     if (!_conn)
-        return string();
-    size_t len;
-    char *data = reinterpret_cast<char*>(PQescapeByteaConn(_conn, value, size, &len));
-    string res(data, data + len);
+        return {};
+    size_t len{};
+    char *data = reinterpret_cast<char*>(PQescapeByteaConn(_conn, value, size, &len)); //NOLINT
+    std::string res(data, data + len);
     PQfreemem(data);
     return res;
 }
 
 // pay attention the connection must be alive
-string connection::escape_identifier(std::string_view ident) const
+std::string connection::escape_identifier(std::string_view ident) const
 {
     if (!_conn || ident.empty())
-        return string();
-    char *escaped_identifier = reinterpret_cast<char*>(PQescapeIdentifier(_conn, ident.data(), ident.size()));
-    string res;
+        return {};
+    char *escaped_identifier = reinterpret_cast<char*>(PQescapeIdentifier(_conn, ident.data(), ident.size())); //NOLINT
+    std::string res;
     if (escaped_identifier)
     {
         res = escaped_identifier;
@@ -380,11 +381,11 @@ string connection::escape_identifier(std::string_view ident) const
     return res;
 }
 
-string escape_identifier_1b(std::string_view ident)
+std::string escape_identifier_1b(std::string_view ident)
 {
     if (ident.size() > 512)
         throw std::invalid_argument("don't do it");
-    char *pos = (char*)alloca(ident.size() * 2 + 2);
+    char *pos = static_cast<char*>(alloca(ident.size() * 2 + 2)); //NOLINT
     char *begin = pos;
     *pos++ = '"';
     for (auto c: ident)
@@ -392,35 +393,35 @@ string escape_identifier_1b(std::string_view ident)
         *pos++ = c;
         if (c == '"')
             *pos++ = c;
-        else if ((unsigned char)(c) & 0x80)
+        else if (static_cast<unsigned char>(c) & 0x80)
             throw std::runtime_error("unsupported character, use `pg::connection::escape_identifier()` instead");
     }
     *pos++ = '"';
     return {begin, static_cast<size_t>(pos - begin)};
 }
 
-string escape_bytea(const unsigned char *value, size_t size)
+std::string escape_bytea(const unsigned char *value, size_t size)
 {
-    size_t len;
-    char *data = reinterpret_cast<char*>(PQescapeBytea(value, size, &len));
-    string res(data, data + len);
+    size_t len{};
+    char *data = reinterpret_cast<char*>(PQescapeBytea(value, size, &len)); //NOLINT
+    std::string res(data, data + len);
     PQfreemem(data);
     return res;
 }
 
-vector<unsigned char> unescape_bytea(const char *value)
+std::vector<unsigned char> unescape_bytea(const char *value)
 {
-    size_t len;
-    unsigned char *data = PQunescapeBytea(reinterpret_cast<const unsigned char*>(value), &len);
-    vector<unsigned char> res(data, data + len);
+    size_t len{};
+    unsigned char *data = PQunescapeBytea(reinterpret_cast<const unsigned char*>(value), &len); //NOLINT
+    std::vector<unsigned char> res(data, data + len);
     PQfreemem(data);
     return res;
 }
 
-string encrypt_password(const string &password, const string &user)
+std::string encrypt_password(const std::string &password, const std::string &user)
 {
     char *raw_enc_pwd = PQencryptPassword(password.c_str(), user.c_str());
-    string enc_pwd;
+    std::string enc_pwd;
     if (raw_enc_pwd)
     {
         enc_pwd = raw_enc_pwd;
@@ -452,7 +453,7 @@ void connection::raise_error(const std::shared_ptr<pg::result> &res) noexcept
     }
 }
 
-void connection::raise_error(const string &error, const std::shared_ptr<pg::result> &res) noexcept
+void connection::raise_error(const std::string &error, const std::shared_ptr<pg::result> &res) noexcept
 {
     _last_error = error;
     raise_error(res);
@@ -498,7 +499,7 @@ void connection::async_connection_proceed()
     case PGRES_POLLING_FAILED: // connection failed
     {
         _socket_watcher_request_cb(socket_watch_mode::none);
-        string error = PQerrorMessage(_conn);
+        std::string error = PQerrorMessage(_conn);
 
         // prev comment here (why?!): "do not release _conn here to avoid error 'connection pointer is NULL'"
         PQfinish(_conn);
@@ -533,11 +534,11 @@ void connection::async_validate_rw_mode()
 {
     if (_q)
         _suspended_query = std::move(_q);
-    _q = make_shared<query>();
+    _q = std::make_shared<query>();
     *_q = "select pg_is_in_recovery()::int::text";
-    _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query> q, const std::string &error)
+    _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query> &q, const std::string &error)
     {
-        string prev_cs = cn._current_cs;
+        std::string prev_cs = cn._current_cs;
         if (cn._db_state_detected_cb)
         {
             if (!q || !error.empty()) // connection has been broken just before PQexec?!
@@ -573,10 +574,10 @@ void connection::async_restore_listen_channels()
 {
     if (_q)
         _suspended_query = std::move(_q);
-    _q = make_shared<query>();
-    for (string &ch : _channels)
+    _q = std::make_shared<query>();
+    for (std::string &ch : _channels)
         _q->query_string += "LISTEN " + ch + ';';
-    _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query>, const std::string &err)
+    _q->query_finished_async_cb = [](connection &cn, std::shared_ptr<query>&, const std::string &err)
     {
         auto prev_q = cn._q;
         if (err.empty())
@@ -617,13 +618,13 @@ bool connection::send_copy_data()
             {
                 _copy_in_done = _q->copy_in_cb(_copy_in_buf);
             }
-            catch (const exception &e)
+            catch (const std::exception &e)
             {
                 _copy_in_buf.clear();
                 _temp_result.reset();
                 _copy_in_done = false;
                 // init server-side error
-                _copy_end_error = string("client-side error:\n") + e.what();
+                _copy_end_error = std::string("client-side error:\n") + e.what();
                 _async_stage = async_stage::put_copy_end;
                 ready_write_socket();
                 return false;
@@ -646,7 +647,8 @@ bool connection::send_copy_data()
                 handle_error();
                 return false;
             }
-            else if (res == 0)
+
+            if (res == 0)
             {
                 _socket_watcher_request_cb(socket_watch_mode::write);
                 return true;
@@ -702,7 +704,7 @@ void connection::connect_async() noexcept
     if (!_q) // standalone connect (not because of query execution)
     {
         _last_error.clear();
-        _last_action_moment = chrono::system_clock::now();
+        _last_action_moment = std::chrono::system_clock::now();
     }
 
     // if current connection is actually broken, the further query will detect it and will try to reconnect
@@ -758,7 +760,7 @@ void connection::connect_async() noexcept
 void connection::exec_async(std::shared_ptr<query> q) noexcept
 {
     // do not change current query state
-    auto safe_raise = [this, &q](const string& error)
+    auto safe_raise = [this, &q](const std::string& error)
     {
         _last_error = error;
         handle_error();
@@ -814,7 +816,7 @@ void connection::exec_async(std::shared_ptr<query> q) noexcept
             if (async_sent_ok)
                 PQsetSingleRowMode(_conn);
         }
-        _last_action_moment = chrono::system_clock::now();
+        _last_action_moment = std::chrono::system_clock::now();
     }
 
     // disconnected or connection broken => reconnect and try again
@@ -862,7 +864,7 @@ void connection::exec_async(std::shared_ptr<query> q) noexcept
 bool connection::connect(unsigned int connect_timeout_sec)
 {
     _last_error.clear();
-    _last_action_moment = chrono::system_clock::now();
+    _last_action_moment = std::chrono::system_clock::now();
 
     // if current connection is actually broken, the further query will detect it and will try to reconnect
     // (but it may looks like ok here)
@@ -885,14 +887,14 @@ bool connection::connect(unsigned int connect_timeout_sec)
         }
     }
 
-    auto current_time = []() ->string
+    auto current_time = []() ->std::string
     {
-        chrono::high_resolution_clock::time_point p = chrono::high_resolution_clock::now();
-        chrono::milliseconds ms = chrono::duration_cast<chrono::milliseconds>(p.time_since_epoch());
-        chrono::seconds sec = chrono::duration_cast<chrono::seconds>(ms);
+        std::chrono::high_resolution_clock::time_point p = std::chrono::high_resolution_clock::now();
+        std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(p.time_since_epoch());
+        std::chrono::seconds sec = std::chrono::duration_cast<std::chrono::seconds>(ms);
         time_t t = sec.count();
-        int fractional_seconds = ms.count() % 1000;
-        tm timeinfo;
+        auto fractional_seconds = ms.count() % 1000;
+        tm timeinfo{};
 #ifdef WIN32
         localtime_s(&timeinfo, &t);
 #else
@@ -900,41 +902,41 @@ bool connection::connect(unsigned int connect_timeout_sec)
 #endif
         char buffer[32];
         size_t len = strftime(buffer, 32, "%H:%M:%S", &timeinfo); //%Y-%m-%d
-        sprintf(buffer + len, ".%03d", fractional_seconds);
-        return string(buffer);
+        len += sprintf(buffer + len, ".%03ld", fractional_seconds);
+        return {buffer, len};
     };
 
-    vector<pair<string, string>> errors;
-    auto push_error = [this, &errors, &current_time](string_view err)
+    std::vector<std::pair<std::string, std::string>> errors;
+    auto push_error = [this, &errors, &current_time](std::string_view err)
     {
         if (err.empty())
             return;
         char *host = PQhost(_conn);
         char *port = PQport(_conn);
 
-        stringstream ss;
+        std::stringstream ss;
         ss << "error connecting to ";
         if (host)
             ss << host << (*host == '/' ? "/<unix socket>." : ":") << (port ? port : "unknown");
         else
             ss << "database";
-        ss << ":" << endl << err;
+        ss << ":\n" << err;
         if (!errors.empty() && errors.back().second == ss.str())
         {
             errors.back().first = current_time();
             return;
         }
-        errors.push_back({current_time(), ss.str()});
+        errors.emplace_back(current_time(), ss.str());
     };
 
-    time_t start_moment;
+    time_t start_moment{};
     time(&start_moment);
     time_t last_try = start_moment;
-    string prev_cs = "foo";
+    std::string prev_cs = "foo";
     do
     {
         if (time(nullptr) - last_try < 1 && (prev_cs == _current_cs || _current_cs.empty()))
-            this_thread::sleep_for(chrono::seconds(1));
+            std::this_thread::sleep_for(std::chrono::seconds(1));
         time(&last_try);
 
         if (_current_cs.empty())
@@ -973,8 +975,8 @@ bool connection::connect(unsigned int connect_timeout_sec)
                         push_error(pg::primary_message(res));
                     else
                     {
-                        auto err = PQerrorMessage(_conn);
-                        push_error(err ? string_view{err} : string_view{});
+                        auto *err = PQerrorMessage(_conn);
+                        push_error(err ? std::string_view{err} : std::string_view{});
                     }
                     PQclear(res);
                     disconnect();
@@ -997,7 +999,7 @@ bool connection::connect(unsigned int connect_timeout_sec)
         time(nullptr) - start_moment < connect_timeout_sec); // retry during <connect_timeout_sec> seconds (e.g. wait for restart to finish)
 
     // update after possibly slow connection
-    _last_action_moment = chrono::system_clock::now();
+    _last_action_moment = std::chrono::system_clock::now();
 
     // connection failed
     if (!_conn)
@@ -1028,7 +1030,7 @@ bool connection::connect(unsigned int connect_timeout_sec)
 
 bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeout_sec)
 {
-    auto raise_error = [this, throw_on_error](string_view error, const shared_ptr<pg::result> &res = shared_ptr<pg::result>())
+    auto raise_error = [this, throw_on_error](std::string_view error, std::shared_ptr<pg::result> res = {})
     {
         _last_error = error;
         handle_error(res.get());
@@ -1036,7 +1038,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
         {
             if (res)
                 throw query_error(res);
-            throw runtime_error(_last_error);
+            throw std::runtime_error(_last_error);
         }
     };
 
@@ -1057,7 +1059,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
     // ***** DIRTY HACK to grant existence of _q to call it's notice handler
     _q = std::shared_ptr<query>(&q, [](query*) { /* do nothing */ });
     // finally we will fix it *****
-    unique_ptr<query, function<void(query*)>> cur_query_guard(&q, [this](query*) { _q.reset(); });
+    std::unique_ptr<query, std::function<void(query*)>> cur_query_guard(&q, [this](query*) { _q.reset(); });
 
     do
     {
@@ -1080,7 +1082,7 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
             {
                 tmp_res = PQexec(_conn, q.query_string.c_str());
             }
-            _last_action_moment = chrono::system_clock::now();
+            _last_action_moment = std::chrono::system_clock::now();
         }
 
         // disconnected or connection broken => reconnect and try again
@@ -1091,13 +1093,13 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
             if (was_in_transaction || !connect(connect_timeout_sec))
             {
                 if (throw_on_error)
-                    throw runtime_error(_last_error);
+                    throw std::runtime_error(_last_error);
                 return false;
             }
             continue;
         }
 
-        auto result = make_shared<pg::result>(tmp_res);
+        auto result = std::make_shared<pg::result>(tmp_res);
         fetch_notifications();
 
         ExecStatusType status = PQresultStatus(tmp_res);
@@ -1155,7 +1157,8 @@ bool connection::exec(query &q, bool throw_on_error, unsigned int connect_timeou
     return true;
 }
 
-std::shared_ptr<pg::result> connection::exec(const string &query_string, const params *p, bool throw_on_error, unsigned int connect_timeout_sec)
+std::shared_ptr<pg::result> connection::exec(const std::string &query_string, const params *p,
+                                             bool throw_on_error, unsigned int connect_timeout_sec)
 {
     query q;
     q = query_string;
@@ -1178,7 +1181,7 @@ bool connection::put_copy_data(const char *buffer, int nbytes, bool throw_on_err
         handle_error();
 
         if (throw_on_error)
-            throw runtime_error(_last_error);
+            throw std::runtime_error(_last_error);
         return false;
     }
     return true;
@@ -1198,24 +1201,24 @@ std::unique_ptr<pg::result> connection::stop_copy_in(const char *stop_reason)
 
     // Acquire PGresult. We must call PQgetResult until nullptr returned.
     // All hope that we will get a single PGresult because we can do nothing with other PGresults.
-    auto res = std::unique_ptr<pg::result>(new pg::result(PQgetResult(_conn)));
+    auto res = std::make_unique<pg::result>(PQgetResult(_conn));
     while (PGresult *tmp_res = PQgetResult(_conn))
         PQclear(tmp_res);
     return res;
 }
 
-std::unique_ptr<pg::result> connection::on_get_copy_data(std::function<bool(const char *, int)> fetch_cb) noexcept
+std::unique_ptr<pg::result> connection::on_get_copy_data(std::function<bool(const char *, int)> &fetch_cb) noexcept
 {
     _last_error.clear();
-    char *buf;
-    int len;
-    int stop_stage = 0;
+    char *buf{};
+    int len{};
+    int stop_stage{};
     while (true)
     {
         len = PQgetCopyData(_conn, &buf, false);
         if (buf && len >= 0)
         {
-            unique_ptr<char, void(*)(void*)> buf_guard(buf, PQfreemem);
+            std::unique_ptr<char, void(*)(void*)> buf_guard(buf, PQfreemem);
             if (stop_stage == 1)
             {
                 // try to cancel fetching (result will be in PGRES_FATAL_ERROR state)
@@ -1255,7 +1258,17 @@ std::unique_ptr<pg::result> connection::on_get_copy_data(std::function<bool(cons
 
     // Acquire PGresult. We must call PQgetResult until nullptr returned.
     // All hope that we will get a single PGresult because we can do nothing with other PGresults.
-    auto res = std::unique_ptr<pg::result>(new pg::result(PQgetResult(_conn)));
+    std::unique_ptr<pg::result> res;
+    try
+    {
+        res = std::make_unique<pg::result>(PQgetResult(_conn));
+    }
+    catch (const std::exception &e)
+    {
+        _last_error = e.what();
+        handle_error();
+        return nullptr;
+    }
     while (PGresult *tmp_res = PQgetResult(_conn))
         PQclear(tmp_res);
     return res;
@@ -1266,13 +1279,13 @@ int connection::socket() const noexcept
     return _conn ? PQsocket(_conn) : -1;
 }
 
-void connection::listen(const std::vector<string> &channels)
+void connection::listen(const std::vector<std::string> &channels)
 {
     _channels = channels;
     if (_conn)
     {
-        string q = "UNLISTEN *;";
-        for (string &ch : _channels) q += "LISTEN " + ch + ';';
+        std::string q = "UNLISTEN *;";
+        for (std::string &ch : _channels) q += "LISTEN " + ch + ';';
         if (_socket_watcher_request_cb)
             _socket_watcher_request_cb(socket_watch_mode::none);
         exec(q, nullptr, false);
@@ -1375,3 +1388,5 @@ void connection::ready_write_socket()
 }
 
 } // namespace pg
+
+//NOLINTEND(bugprone-empty-catch)

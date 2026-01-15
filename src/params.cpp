@@ -1,8 +1,7 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #include "pgpp/params.h"
-#include <string.h>
 #include <string>
 
 namespace pg
@@ -10,7 +9,7 @@ namespace pg
 
 params &params::add(std::string &&param)
 {
-    _temps.emplace_back(param);
+    _temps.emplace_back(std::move(param));
     return addref(_temps.back().data(), static_cast<int>(_temps.back().size()));
 }
 
@@ -32,7 +31,7 @@ params &params::add(const char *param, int size)
 
 params &params::addref(const std::string &param)
 {
-    return addref(param.data(), param.size());
+    return addref(param.data(), static_cast<int>(param.size()));
 }
 
 params &params::addref(const char *param, int size)

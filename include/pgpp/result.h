@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PG_RESULT_H
@@ -33,26 +33,26 @@ public:
     explicit result(PGresult *res) noexcept;
     ~result();
 
-    PGresult* result_ptr() const noexcept { return _res; }
+    [[nodiscard]] PGresult* result_ptr() const noexcept { return _res; }
     void clear_data();
 
-    int row_count() const noexcept;
-    int column_count() const noexcept;
+    [[nodiscard]] int row_count() const noexcept;
+    [[nodiscard]] int column_count() const noexcept;
 
-    const char* raw_value(int row, int col) const noexcept;
+    [[nodiscard]] const char* raw_value(int row, int col) const noexcept;
     const char* raw_value(int row, const char *col_name) const noexcept;
     std::vector<unsigned char> bytea_value(int row, int col);
 
-    int value_size(int row, int col) const noexcept;
+    [[nodiscard]] int value_size(int row, int col) const noexcept;
     int value_size(int row, const char *col_name) const noexcept;
 
-    bool is_null(int row, int col) const noexcept;
+    [[nodiscard]] bool is_null(int row, int col) const noexcept;
     bool is_null(int row, const char *col_name) const noexcept;
 
     int column_index(const char* col_name) const noexcept;
-    const char* column_name(int col_number) const noexcept;
-    unsigned int column_type(int col_number) const noexcept;
-    int scale(int col_number) const noexcept;
+    [[nodiscard]] const char* column_name(int col_number) const noexcept;
+    [[nodiscard]] unsigned int column_type(int col_number) const noexcept;
+    [[nodiscard]] int scale(int col_number) const noexcept;
 
     template <typename T>
     std::optional<T> value(int row, int col) const
@@ -93,17 +93,17 @@ public:
         return value<T>(row, col_name.data());
     }
 
-    operator bool() const;
-    bool copy_in_ready() const;
-    bool copy_out_ready() const;
+    operator bool() const; //NOLINT
+    [[nodiscard]] bool copy_in_ready() const;
+    [[nodiscard]] bool copy_out_ready() const;
 
-    std::string_view severity_eng() const;
-    std::string_view severity() const;
-    std::string_view state() const;
-    std::string_view primary_message() const;
-    std::string_view detail() const;
-    std::string_view hint() const;
-    std::string_view full_message() const;
+    [[nodiscard]] std::string_view severity_eng() const;
+    [[nodiscard]] std::string_view severity() const;
+    [[nodiscard]] std::string_view state() const;
+    [[nodiscard]] std::string_view primary_message() const;
+    [[nodiscard]] std::string_view detail() const;
+    [[nodiscard]] std::string_view hint() const;
+    [[nodiscard]] std::string_view full_message() const;
 
     // contains rows already fetched before error occured (async query only)
     std::shared_ptr<result> partial_result;

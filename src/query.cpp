@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #include "pgpp/query.h"
@@ -6,15 +6,14 @@
 namespace pg
 {
 
-query::query(const std::string &q) : query_string(q)
+query::query(std::string_view q) : query_string(q)
 {
-
 }
 
-std::string query::operator =(const std::string &q)
+query& query::operator =(std::string_view q)
 {
     query_string = q;
-    return query_string;
+    return *this;
 }
 
 // TODO: safe api, indirect members access
