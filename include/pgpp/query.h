@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #ifndef PG_QUERY_H
@@ -15,8 +15,8 @@ namespace pg
 class query
 {
 public:
-    query(const std::string &q = "");
-    std::string operator = (const std::string &q);
+    explicit query(std::string_view q = {});
+    query& operator =(std::string_view q);
     std::string query_string;
     pg::params params;
     bool throw_on_error = false;
@@ -26,7 +26,7 @@ public:
      * @brief On query finished callback.
      * It is always called when query processing finished (in any case: success, execution error or connection error).
      */
-    fu2::unique_function<void(connection &cn, std::shared_ptr<query> q, const std::string &error)> query_finished_async_cb;
+    fu2::unique_function<void(connection &cn, std::shared_ptr<query> &q, const std::string &error)> query_finished_async_cb;
 
     /**
      * @brief The function is called when fetching of new resultset is started.

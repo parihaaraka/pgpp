@@ -31,7 +31,7 @@ enum class dbmode {
  * @tparam T database class to be pooled
  */
 template<typename T>
-class dbpool
+class dbpool //NOLINT(cppcoreguidelines-special-member-functions)
 {
 private:
     static std::function<void(
@@ -123,15 +123,14 @@ public:
         else
         {
             // create new connection
-            db = new T(node->connection_string,
-                       bind(&dbpool<T>::db_state_detected,
-                            this,
-                            std::placeholders::_1,
-                            std::placeholders::_2,
-                            std::placeholders::_3,
-                            is_writable ? dbmode::rw : dbmode::ro));
+            std::unique_ptr<T> db_ptr(
+                new T(node->connection_string,
+                      bind(&dbpool<T>::db_state_detected, this, std::placeholders::_1,
+                           std::placeholders::_2, std::placeholders::_3,
+                           is_writable ? dbmode::rw : dbmode::ro)));
+            db = db_ptr.get();
             _connections_in_use.emplace(db, new dbconnection{
-                                            std::unique_ptr<T>(db),
+                                            std::move(db_ptr),
                                             node,
                                             std::chrono::system_clock::now()});
             ++node->total;
@@ -170,7 +169,7 @@ public:
             else
             {
                 cn->got_back = std::chrono::system_clock::now();
-                pool->_available_connections.push_front(move(cn));
+                pool->_available_connections.push_front(std::move(cn));
                 pool->_connections_in_use.erase(cn_raw);
                 ++(*it).second->available;
             }
@@ -211,8 +210,8 @@ public:
         if (pool_it != _pools.end())
             return pool_it->second;
 
-		if (dont_create)
-			return std::shared_ptr<dbpool>();
+        if (dont_create)
+            return std::shared_ptr<dbpool>();
 
         // make_shared unable to use private constructor
         auto pool = std::shared_ptr<dbpool>(new dbpool);
@@ -253,9 +252,9 @@ private:
     }
 
     // node metadata
-    struct dbnode
+    struct dbnode //NOLINT(cppcoreguidelines-special-member-functions)
     {
-        dbnode(const std::string &cs) : connection_string(cs), mode(dbmode::na)
+        explicit dbnode(const std::string &cs) : connection_string(cs)
         {
             std::hash<std::string> hash_fn;
             hash = hash_fn(cs);
@@ -264,7 +263,7 @@ private:
         dbnode& operator=(const dbnode&) = delete;
 
         std::string connection_string;
-        dbmode mode;
+        dbmode mode = dbmode::na;
         size_t hash;
         size_t total = 0;
         size_t available = 0;
@@ -304,7 +303,7 @@ private:
             return;
         }
 
-        bool want_another_connection;
+        bool want_another_connection; //NOLINT
         // refresh current node state
         if (detected_mode == dbmode::na)
         {

@@ -1,8 +1,7 @@
-// Copyright (c) 2015-2019 Andrey Lukyanov <parihaaraka@gmail.com>
+// Copyright (c) 2015-2026 Andrey Lukyanov <parihaaraka@gmail.com>
 // MIT License
 
 #include "pgpp/params.h"
-#include <string.h>
 #include <string>
 
 namespace pg
