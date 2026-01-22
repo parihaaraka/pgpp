@@ -4,6 +4,7 @@
 #ifndef PG_RESULT_H
 #define PG_RESULT_H
 
+#include <cstring>
 #include <optional>
 #include <charconv>
 #include <string>
@@ -40,16 +41,18 @@ public:
     [[nodiscard]] int column_count() const noexcept;
 
     [[nodiscard]] const char* raw_value(int row, int col) const noexcept;
-    const char* raw_value(int row, const char *col_name) const noexcept;
+    [[nodiscard]] const char* raw_value(int row, const char *col_name) const noexcept;
     std::vector<unsigned char> bytea_value(int row, int col);
 
     [[nodiscard]] int value_size(int row, int col) const noexcept;
-    int value_size(int row, const char *col_name) const noexcept;
+    [[nodiscard]] int value_size(int row, const char *col_name) const noexcept;
 
     [[nodiscard]] bool is_null(int row, int col) const noexcept;
-    bool is_null(int row, const char *col_name) const noexcept;
+    [[nodiscard]] bool is_null(int row, const char *col_name) const noexcept;
 
-    int column_index(const char* col_name) const noexcept;
+    [[nodiscard]] int column_index(const char* col_name) const noexcept;
+    [[nodiscard]] int column_index(std::string_view col_name) const noexcept;
+
     [[nodiscard]] const char* column_name(int col_number) const noexcept;
     [[nodiscard]] unsigned int column_type(int col_number) const noexcept;
     [[nodiscard]] int scale(int col_number) const noexcept;
@@ -90,7 +93,10 @@ public:
     template <typename T>
     std::optional<T> value(int row, std::string_view col_name) const
     {
-        return value<T>(row, col_name.data());
+        auto *buf = static_cast<char*>(alloca(col_name.size() + 1));
+        std::memcpy(buf, col_name.data(), col_name.size());
+        buf[col_name.size()] = 0;
+        return value<T>(row, buf);
     }
 
     operator bool() const; //NOLINT

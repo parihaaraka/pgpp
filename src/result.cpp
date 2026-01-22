@@ -95,6 +95,16 @@ int result::column_index(const char* col_name) const noexcept
     return (_res ? PQfnumber(_res, col_name) : -1);
 }
 
+int result::column_index(std::string_view col_name) const noexcept
+{
+    if (!_res)
+        return -1;
+    auto *buf = static_cast<char*>(alloca(col_name.size() + 1));
+    std::memcpy(buf, col_name.data(), col_name.size());
+    buf[col_name.size()] = '\0';
+    return PQfnumber(_res, buf);
+}
+
 const char* result::column_name(int col_number) const noexcept
 {
     return (_res ? PQfname(_res, col_number) : nullptr);

@@ -9,6 +9,8 @@
 #include <thread>
 #include <cstring>
 
+//NOLINTBEGIN(bugprone-empty-catch)
+
 namespace pg
 {
 
@@ -80,7 +82,7 @@ connection::~connection()
 
 void connection::notice_receiver(void *arg, const PGresult *res)
 {
-    connection *cn = static_cast<connection*>(arg);
+    auto *cn = static_cast<connection*>(arg);
     auto severity = pg::severity_eng(res);
     auto msg = pg::primary_message(res);
     auto hint = pg::hint(res);
@@ -383,7 +385,7 @@ std::string escape_identifier_1b(std::string_view ident)
 {
     if (ident.size() > 512)
         throw std::invalid_argument("don't do it");
-    char *pos = static_cast<char*>(alloca(ident.size() * 2 + 2));
+    char *pos = static_cast<char*>(alloca(ident.size() * 2 + 2)); //NOLINT
     char *begin = pos;
     *pos++ = '"';
     for (auto c: ident)
@@ -918,13 +920,13 @@ bool connection::connect(unsigned int connect_timeout_sec)
             ss << host << (*host == '/' ? "/<unix socket>." : ":") << (port ? port : "unknown");
         else
             ss << "database";
-        ss << ":" << std::endl << err;
+        ss << ":\n" << err;
         if (!errors.empty() && errors.back().second == ss.str())
         {
             errors.back().first = current_time();
             return;
         }
-        errors.push_back({current_time(), ss.str()});
+        errors.emplace_back(current_time(), ss.str());
     };
 
     time_t start_moment{};
@@ -1199,7 +1201,7 @@ std::unique_ptr<pg::result> connection::stop_copy_in(const char *stop_reason)
 
     // Acquire PGresult. We must call PQgetResult until nullptr returned.
     // All hope that we will get a single PGresult because we can do nothing with other PGresults.
-    auto res = std::unique_ptr<pg::result>(new pg::result(PQgetResult(_conn)));
+    auto res = std::make_unique<pg::result>(PQgetResult(_conn));
     while (PGresult *tmp_res = PQgetResult(_conn))
         PQclear(tmp_res);
     return res;
@@ -1386,3 +1388,5 @@ void connection::ready_write_socket()
 }
 
 } // namespace pg
+
+//NOLINTEND(bugprone-empty-catch)
